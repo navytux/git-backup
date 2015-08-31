@@ -51,3 +51,7 @@ Backup workflow is:
 
 
 Please see `git-backup` source with technical overview on how it works.
+
+We also provide convenience program to pull/restore backup data for a GitLab
+instance into/from git-backup managed repository. See `contrib/gitlab-backup`
+for details.

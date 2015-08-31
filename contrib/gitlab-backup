@@ -1,0 +1,166 @@
+#!/bin/bash -e
+# pull/restore gitlab data into/from git-backup
+# Copyright (C) 2015  Nexedi SA and Contributors.
+#                     Kirill Smelkov <kirr@nexedi.com>
+#
+# This program is free software: you can Use, Study, Modify and Redistribute
+# it under the terms of the GNU General Public License version 3, or (at your
+# option) any later version, as published by the Free Software Foundation.
+#
+# This program is distributed WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# See COPYING file for full licensing terms.
+
+die() {
+    echo "$@" 1>&2
+    exit 1
+}
+
+
+GITLAB_BACKUP_PATH=
+GITLAB_REPOS_PATH=
+
+need_gitlab_config() {
+    test -n "$GITLAB_BACKUP_PATH" && return
+
+    # various gitlab config values extracted in 1 go (gitlab is very slow to load)
+    {
+        read GITLAB_BACKUP_PATH;
+        read GITLAB_REPOS_PATH;
+    } < <(gitlab-rails r 'puts Gitlab.config.backup.path, Gitlab.config.gitlab_shell.repos_path')
+
+    test -n "$GITLAB_BACKUP_PATH"   || die "E: cannot detect GITLAB_BACKUP_PATH"
+    test -n "$GITLAB_REPOS_PATH"    || die "E: cannot detect GITLAB_REPOS_PATH"
+}
+
+
+backup_pull() {
+    need_gitlab_config
+
+    # 1. dump all gitlab data except repositories
+    echo " * Dumping gitlab data (except repositories)"
+    tmpd=`mktemp -d gitlab-backup.XXXXXX`
+    gitlab-rake gitlab:backup:create SKIP=repositories | tee "$tmpd/gitlab_backup_create.out"
+    backup_tar=`grep "^Creating backup archive: .* done" "$tmpd/gitlab_backup_create.out"` || \
+        die "E: Cannot detect backup tar"
+
+    # 'Creating backup archive: 1440613567_gitlab_backup.tar ... done' -> 1440613567_gitlab_backup.tar
+    backup_tar=`echo "$backup_tar" | grep -o '[^ ]*\.tar'`
+    # 1440613567_gitlab_backup.tar -> /var/opt/gitlab/backups/1440613958_gitlab_backup.tar
+    backup_tar="$GITLAB_BACKUP_PATH/$backup_tar"
+
+
+    # 2. unpack backup_tar so it is ready to be pulled into git-backup
+    mkdir "$tmpd/gitlab_backup"
+    tar -C "$tmpd/gitlab_backup" -xf "$backup_tar"
+    gzip -d "$tmpd/gitlab_backup/db/database.sql.gz"  # unzip so it is better stored in git
+
+
+    # 3. pull gitlab data into git-backup
+    # gitlab/misc   - db + uploads + ...
+    # gitlab/repo   - git repositories
+    echo " * git-backup pull everything"
+    $GIT_BACKUP pull "$tmpd/gitlab_backup:gitlab/misc"  $GITLAB_REPOS_PATH:gitlab/repo
+
+    # mark backup_tar as pulled and cleanup
+    mv "$backup_tar" "$backup_tar.pulled"
+    rm -rf "$tmpd"
+
+    echo OK
+}
+
+
+backup_restore() {
+    HEAD=$1
+
+    need_gitlab_config
+
+    # 1. extract all gitlab data except repositories
+    echo " * Extracting gitlab data (except repositories)"
+    tmpd=`mktemp -d gitlab-backup.XXXXXX`
+
+    $GIT_BACKUP restore $HEAD gitlab/misc:"$tmpd/gitlab_backup"
+    gzip "$tmpd/gitlab_backup/db/database.sql"  # gzip sql dump, as gitlab expects .gz
+
+    # 2. find out backup timestamp as saved by gitlab
+    backup_created_at=`grep :backup_created_at: "$tmpd/gitlab_backup/backup_information.yml" |
+                        sed -e s'/:backup_created_at: //'`
+    # 2015-08-27 11:32:37.201345216 +02:00 -> 1440667957
+    backup_created_at=`echo "$backup_created_at" |
+                        gitlab-rake -e 'puts Time.parse(STDIN.read).to_i'`
+
+    # 3. prepare tarball as would be created by gitlab:backup:create
+    backup_tar="${backup_created_at}_gitlab_backup.tar"
+    backup_tar="$GITLAB_BACKUP_PATH/$backup_tar"
+    test -e "$backup_tar" && die "E: $backup_tar already exists"
+    tar -C "$tmpd/gitlab_backup" -cf "$backup_tar" .
+
+    rm -rf "$tmpd"  # tmpd no longer needed
+
+    # 4. extract repositories into .../repositories.<timestamp>
+    $GIT_BACKUP restore $HEAD gitlab/repo:"${GITLAB_REPOS_PATH}.${backup_created_at}"
+
+
+    # extraction complete - now proceed with actual backup restore
+    # (which is mv repositories dir + load db)
+    echo
+    echo "Extraction complete. To actually restore data please do"
+    echo "# TODO check, and make this run automatically"
+    cat << EOF
+# https://gitlab.com/gitlab-org/gitlab-ce/blob/master/doc/raketasks/backup_restore.md
+gitlab-ctl stop unicorn
+gitlab-ctl stop sidekiq
+mv ${GITLAB_REPOS_PATH} ${GITLAB_REPOS_PATH}.old
+mv ${GITLAB_REPOS_PATH}.${backup_created_at} ${GITLAB_REPOS_PATH}
+gitlab-rake gitlab:backup:restore BACKUP=$backup_created_at
+gitlab-ctl start
+gitlab-rake gitlab:satellites:create    # will go away after gitlab 8.0
+gitlab-rake gitlab:check SANITIZE=true
+EOF
+}
+
+
+# ----------------------------------------
+
+# make sure git-backup is present or explicitly specified
+GIT_BACKUP=${GIT_BACKUP:-`which git-backup`} || die "E: where is git-backup ?"
+
+# make sure we run under proper user used by gitlab
+gitlab_user=`gitlab-rake -e "exec 'whoami'"`
+me=`whoami`
+if test "$me" != "$gitlab_user"; then
+    #echo respawning ...
+    exec gitlab-rake -e "Dir.chdir \"$PWD\"; exec \"GIT_BACKUP=$GIT_BACKUP $0 $*\""
+fi
+
+
+# we are working with potentially sensitive data
+# -> limit what could be read to current user only
+umask 0077    # XXX maybe not good - e.g. git-data/repositories should (?) be rwxrwx---
+
+
+usage() {
+    echo "Usage: gitlab-backup [pull | restore <commit-ish>]"
+}
+
+
+test $# -lt 1 && die `usage`
+action="$1"
+shift
+
+case "$action" in
+    pull)
+        backup_pull
+        ;;
+    restore)
+        test $# -lt 1 && die `usage`
+        backup_restore "$1"
+        ;;
+    -h)
+        usage
+        exit 0
+        ;;
+    *)
+        die `usage`
+esac
