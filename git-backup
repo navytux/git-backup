@@ -1,0 +1,788 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# Copyright (C) 2015  Nexedi SA and Contributors.
+#                     Kirill Smelkov <kirr@nexedi.com>
+#
+# This program is free software: you can Use, Study, Modify and Redistribute
+# it under the terms of the GNU General Public License version 3, or (at your
+# option) any later version, as published by the Free Software Foundation.
+#
+# This program is distributed WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# See COPYING file for full licensing terms.
+"""Git-backup - Backup set of Git repositories & just files; efficiently
+
+This program backups files and set of bare Git repositories into one Git repository.
+Files are copied to blobs and then added to tree under certain place, and for
+Git repositories, all reachable objects are pulled in with maintaining index
+which remembers reference -> sha1 for every pulled repositories.
+
+After objects from backuped Git repositories are pulled in, we create new
+commit which references tree with changed backup index and files, and also has
+all head objects from pulled-in repositories in its parents(*). This way backup
+has history and all pulled objects become reachable from single head commit in
+backup repository. In particular that means that the whole state of backup can
+be described with only single sha1, and that backup repository itself could be
+synchronized via standard git pull/push, be repacked, etc.
+
+Restoration process is the opposite - from a particular backup state, files are
+extracted at a proper place, and for Git repositories a pack with all objects
+reachable from that repository heads is prepared and extracted from backup
+repository object database.
+
+This approach allows to leverage Git's good ability for object contents
+deduplication and packing, especially for cases when there are many hosted
+repositories which are forks of each other with relatively minor changes in
+between each other and over time, and mostly common base. In author experience
+the size of backup is dramatically smaller compared to straightforward "let's
+tar it all" approach.
+
+Data for all backuped files and repositories can be accessed if one has access
+to backup repository, so either they all should be in the same security domain,
+or extra care has to be taken to protect access to backup repository.
+
+File permissions are not managed with strict details due to inherent
+nature of Git. This aspect can be improved with e.g. etckeeper-like
+(http://etckeeper.branchable.com/) approach if needed.
+
+Please see README.txt with user-level overview on how to use git-backup.
+
+NOTE the idea of pulling all refs together is similar to git-namespaces
+     http://git-scm.com/docs/gitnamespaces
+
+(*) Tag objects are handled specially - because in a lot of places Git insists and
+    assumes commit parents can only be commit objects. We encode tag objects in
+    specially-crafted commit object on pull, and decode back on backup restore.
+
+    We do likewise if a ref points to tree or blob, which is valid in Git.
+"""
+
+import os
+import sys
+from os.path import join as pathjoin, exists as pathexists, dirname
+from time import strftime
+from subprocess import Popen, PIPE
+from stat import S_ISLNK
+from getopt import getopt, GetoptError
+from errno import EEXIST
+from urllib import quote, unquote
+
+
+# verbose output
+# 0 - silent
+# 1 - info
+# 2 - progress of long-running operations
+# 3 - debug
+verbose = 1
+def info(msg):
+    if verbose > 0:
+        print(msg)
+
+# what to pass to git subprocess to stdout/stderr
+# None - no-redirection, PIPE - output to us
+def gitprogress():
+    return None if verbose > 1 else PIPE
+
+def debug(msg):
+    if verbose > 2:
+        print(msg)
+
+
+# run `git *argv` -> retcode, stdout, stderr
+# **kw can be: stdin=... stdout,stderr=PIPE|None raw=True|False env=dict|None
+def git(*argv, **kw):
+    argv = ['git'] + list(argv)
+    stdin  = kw.pop('stdin',  None)
+    stdout = kw.pop('stdout', PIPE)
+    stderr = kw.pop('stderr', PIPE)
+    raw    = kw.pop('raw',    False)
+    env    = kw.pop('env',    None)
+    if kw:
+        raise RuntimeError('git: unsupported kwargs: %s' % kw)
+    debug(' '.join(argv))
+    p = Popen(argv, stdin=PIPE, stdout=stdout, stderr=stderr, env=env)
+    stdout, stderr = p.communicate(stdin)
+    if not raw:
+        # prettify stdout (e.g. so that 'sha1\n' becomes 'sha1' and can be used directly
+        if stdout is not None:
+            stdout = stdout.strip()
+        if stderr is not None:
+            stderr = stderr.strip()
+    return p.returncode, stdout, stderr
+
+# run `git *argv` -> stdout
+# on error - raise exception
+def xgit(*argv, **kw):
+    retcode, stdout, stderr = git(*argv, **kw)
+    if retcode:
+        raise RuntimeError('git ' + ' '.join(argv) + '\n' + (stderr and stderr or '(failed)'))
+    return stdout
+
+
+# like os.walk() but raise on error + entries are emitted in sorted order
+def reraise(e): raise e
+def xwalk(top):
+    for dirpath, dirnames, filenames in os.walk(top, onerror=reraise):
+        dirnames.sort();  filenames.sort()
+        yield dirpath, dirnames, filenames
+
+
+# strip_prefix('/a/b', '/a/b/c/d/e') -> 'c/d/e' (without leading /)
+def strip_prefix(prefix, path):
+    assert path.startswith(prefix)
+    path = path[len(prefix):]
+    while path.startswith('/'):
+        path = path[1:]             # strip leading /
+    return path
+
+# reprefix('/a', '/b', '/a/str') -> '/b/str'
+def reprefix(prefix_from, prefix_to, path):
+    path = strip_prefix(prefix_from, path)
+    return '%s/%s' % (prefix_to, path)
+
+
+# remove all occurrences of item in seq
+def removeall(seq, item):
+    while item in seq:
+        seq.remove(item)
+
+
+# mkdir -p
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as e:
+        if e.errno != EEXIST:
+            raise
+
+
+# file -> blob_sha1, mode
+def file_to_blob(path):
+    argv = ['hash-object', '-w', '--no-filters']
+
+    st = os.lstat(path)
+    if S_ISLNK(st.st_mode):
+        # git hash-object does not handle symlinks
+        argv  += ['--stdin']
+        stdin  = os.readlink(path)
+    else:
+        argv  += ['--', path]
+        stdin = None
+
+    blob_sha1 = xgit(*argv, stdin=stdin)
+    return blob_sha1, st.st_mode
+
+# blob_sha1, mode -> file
+def blob_to_file(blob_sha1, mode, path):
+    blob_content = xgit('cat-file', 'blob', blob_sha1, raw=True)
+
+    mkdir_p(dirname(path))
+
+    if S_ISLNK(mode):
+        os.symlink(blob_content, path)
+    else:
+        with open(path, 'wb') as f:
+            f.write(blob_content)
+            os.fchmod(f.fileno(), mode)
+
+
+# create empty git tree -> tree sha1
+tree_empty = None
+def mktree_empty():
+    global tree_empty
+    if not tree_empty:
+        tree_empty = xgit('mktree', stdin='')
+    return tree_empty
+
+# `git commit-tree` -> commit_sha1,   raise on error
+def xcommit_tree(tree, parents, msg, author={}, committer={}):
+    argv = ['commit-tree', tree]
+    for _ in parents:
+        argv += ['-p', _]
+
+    env = os.environ.copy()
+    if author.get('name'):      env['GIT_AUTHOR_NAME']      = author['name']
+    if author.get('email'):     env['GIT_AUTHOR_EMAIL']     = author['email']
+    if author.get('date'):      env['GIT_AUTHOR_DATE']      = author['date']
+    if committer.get('name'):   env['GIT_COMMITTER_NAME']   = committer['name']
+    if committer.get('email'):  env['GIT_COMMITTER_EMAIL']  = committer['email']
+    if committer.get('date'):   env['GIT_COMMITTER_DATE']   = committer['date']
+
+    return xgit(*argv, stdin=msg, env=env)
+
+
+# parse tag object -> tagged_type, tagged_sha1
+def tag_info(tag_raw):
+    _ = tag_raw.splitlines()
+    _sha1 = _[0]    # object 7ecec52d42a964c4a8e9f6ca41bb0b5ce00049b4
+    _type = _[1]    # type commit
+
+    _, tagged_sha1 = _sha1.split()
+    if _ != 'object':
+        raise RuntimeError("E: expected 'object' got %r" % _)
+    _, tagged_type = _type.split()
+    if _ != 'type':
+        raise RuntimeError("E: expected 'type' got %r" % _)
+
+    return tagged_type, tagged_sha1
+
+# represent tag/tree/blob as specially crafted commit
+#
+# The reason we do this is that we want refs/tag/* to be parents of synthetic
+# backup commit, but git does not allow tag objects to be in commit parents.
+# Also besides commit and tag, it is possible for a ref to point to a tree or blob.
+#
+# We always attach original tagged object to crafted commit in one way or
+# another, so that on backup restore we only have to recreate original tag
+# object and tagged object is kept there in repo thanks to it being reachable
+# through created commit.
+def obj_represent_as_commit(sha1, obj_type=None):
+    if obj_type is None:
+        obj_type = xgit('cat-file', '-t', sha1)
+    if obj_type not in ('tag', 'tree', 'blob'):
+        raise RuntimeError('E: cannot encode %s as commit' % obj_type)
+
+    # first line in commit msg = object type
+    obj_encoded = '%s\n' % obj_type
+
+    # below the code layout is mainly for tag type, and we hook tree and blob
+    # types handling into that layout
+    if obj_type == 'tag':
+        tag_raw = xgit('cat-file', 'tag', sha1, raw=True)
+        tagged_type, tagged_sha1 = tag_info(tag_raw)
+        obj_encoded += tag_raw
+    else:
+        # for tree/blob we only care that object stays reachable
+        tagged_type = obj_type
+        tagged_sha1 = sha1
+
+    # all commits we do here - we do with fixed name/date, so transformation
+    # tag->commit is stable wrt git environment and time change
+    fixed = {'name': 'Git backup', 'email': 'git@backup.org', 'date': '@0 +0000'}
+    def zcommit_tree(tree, parents, msg):
+        return xcommit_tree(tree, parents, msg, author=fixed, committer=fixed)
+
+    # Tag        ~>     Commit*
+    #  |                 .msg:      Tag
+    #  v                 .tree   -> ø
+    # Commit             .parent -> Commit
+    if tagged_type == 'commit':
+        return zcommit_tree(mktree_empty(), [tagged_sha1], obj_encoded)
+
+    # Tag        ~>     Commit*
+    #  |                 .msg:      Tag
+    #  v                 .tree   -> Tree
+    # Tree               .parent -> ø
+    if tagged_type == 'tree':
+        return zcommit_tree(tagged_sha1, [], obj_encoded)
+
+    # Tag        ~>     Commit*
+    #  |                 .msg:      Tag
+    #  v                 .tree   -> Tree* "tagged" -> Blob
+    # Blob               .parent -> ø
+    if tagged_type == 'blob':
+        tree_for_blob = xgit('mktree', stdin='100644 blob %s\ttagged\n' % tagged_sha1)
+        return zcommit_tree(tree_for_blob, [], obj_encoded)
+
+    # Tag₂       ~>     Commit₂*
+    #  |                 .msg:      Tag₂
+    #  v                 .tree   -> ø
+    # Tag₁               .parent -> Commit₁*
+    if tagged_type == 'tag':
+        commit1 = obj_represent_as_commit(tagged_sha1, tagged_type)
+        return zcommit_tree(mktree_empty(), [commit1], obj_encoded)
+
+    raise RuntimeError('E: Unknown tagged type %r in %s' % (tagged_type, sha1))
+
+
+# recreate tag/tree/blob from specially crafted commit
+# (see obj_represent_as_commit() about how a objects are originally translated into commit)
+def obj_recreate_from_commit(commit_sha1):
+    # extract .tree .parent[] and .msg
+    #
+    # unfortunately `git show --format=%B` adds newline and optionally wants to
+    # reencode commit message and otherwise heavily rely on rev-list traversal
+    # machinery -> so we decode commit by hand in a plumbing way.
+    commit_raw = xgit('cat-file', 'commit', commit_sha1, raw=True)
+    msg_start = commit_raw.index('\n\n')
+    msg     = commit_raw[msg_start+2:]
+    head    = commit_raw[:msg_start+1]
+
+    tree = None
+    parent = None
+    for _ in head.splitlines():
+        if _.startswith('tree '):
+            if tree:
+                raise RuntimeError('E: multiple tree in commit %s' % commit_sha1)
+            _, tree = _.split()
+            continue
+
+        if _.startswith('parent '):
+            if parent:
+                raise RuntimeError('E: encoded obj has >1 parents in commit %s' % commit_sha1)
+            _, parent = _.split()
+            continue
+
+    if not tree:
+        raise RuntimeError('E: no tree in commit %s' % commit_sha1)
+
+    obj_type, _, obj_raw = msg.partition('\n')
+    if obj_type not in ('tag', 'tree', 'blob'):
+        raise RuntimeError('E: unexpected encoded object type %r in %s' % (obj_type, commit_sha1))
+
+    # for tree/blob we do not need to do anything - that objects were reachable
+    # from commit and are present in git db.
+    if obj_type in ('tree', 'blob'):
+        return
+
+    # re-create tag object
+    tag_sha1 = xgit('hash-object', '-t', 'tag', '-w', '--stdin', stdin=obj_raw)
+
+    # the original tagged object should be already in repository, because we
+    # always attach it to encoding commit one way or another,
+    # except we need to recurse, if it was Tag₂->Tag₁
+    tagged_type, _ = tag_info(obj_raw)
+    if tagged_type == 'tag':
+        assert parent is not None
+        obj_recreate_from_commit(parent)
+
+    # verify consistency via re-encoding tag again
+    commit_sha1_ = obj_represent_as_commit(tag_sha1, 'tag')
+    if commit_sha1_ != commit_sha1:
+        raise RuntimeError('E: tag encoded by commit %s corrupt (reencoded as %s)' %
+                                (commit_sha1, commit_sha1_))
+
+
+# git-backup pull
+def cmd_pull_usage(f):
+    print >>f,  \
+"""git-backup pull <dir1>:<prefix1> <dir2>:<prefix2> ...
+
+Pull bare Git repositories & just files from dir1 into backup prefix1,
+from dir2 into backup prefix2, etc...
+"""
+
+def cmd_pull(argv):
+    try:
+        optv, argv = getopt(argv, "h", ["help"])
+    except GetoptError as e:
+        print(e)
+        cmd_pull_usage(sys.stderr)
+        exit(1)
+
+    for opt, arg in optv:
+        if   opt in ("-h", "--help"):
+            cmd_pull_usage(sys.stdout)
+            exit(0)
+
+    if not argv:
+        cmd_pull_usage(sys.stderr)
+        exit(1)
+
+    pullspecv = []  # [] of (dir,prefix)
+    for _ in argv:
+        try:
+            dir_, prefix = _.split(':')
+        except ValueError:
+            print >>sys.stderr, "E: invalid pullspec '%s'" % _
+            cmd_pull_usage(sys.stderr)
+            exit(1)
+
+        pullspecv.append( (dir_, prefix) )
+
+    cmd_pull_(pullspecv)
+
+
+def cmd_pull_(pullspecv):
+    # while pulling, we'll keep refs from all pulled repositories under temp
+    # unique work refs namespace.
+    backup_time = strftime('%Y%m%d-%H%M')
+    backup_refs_work = 'refs/backup/%s/' % backup_time # refs/backup/20150820-2109/
+    backup_lock      = 'refs/backup.locked'
+
+    # make sure another `git-backup pull` is not running
+    xgit('update-ref', backup_lock, mktree_empty(), '00'*20)
+
+    # make sure there is root commit
+    st, _, _ = git('rev-parse', '--verify', 'HEAD')
+    if st:
+        info('# creating root commit')
+        # NOTE `git commit` does not work in bare repo - do commit by hand
+        commit = xcommit_tree(mktree_empty(), [], 'Initialize git-backup repository')
+        xgit('update-ref', '-m', 'git-backup pull init', 'HEAD', commit)
+
+
+    # walk over specified dirs, pulling objects from git and adding non-git-object files
+    for dir_, prefix in pullspecv:
+
+        # make sure index is empty for prefix (so that we start from clean
+        # prefix namespace and this way won't leave stale removed things)
+        xgit('rm', '--cached', '-r', '--ignore-unmatch', '--', prefix)
+
+        for dirpath, dirnames, filenames in xwalk(dir_):
+
+            # files -> add directly to index to commit later
+            for _ in filenames:
+                filepath = pathjoin(dirpath, _)
+                info('# file %s\t<- %s' % (prefix, filepath))
+                blob, mode = file_to_blob(filepath)
+                xgit('update-index', '--add', '--cacheinfo', '%o,%s,%s' %   \
+                            (mode, blob, reprefix(dir_, prefix, filepath)) )
+
+
+            # directories -> look for *.git and handle git object specially
+            for i, dirname in enumerate(dirnames):
+                # do not recurse into *.git/objects/  - we'll save them specially
+                if dirpath.endswith('.git') and dirname == 'objects':
+                    dirnames[i] = None
+                    continue
+
+                # else we recurse, but handle *.git specially - via fetching objects from it
+                if not dirname.endswith('.git'):
+                    continue
+
+                # git repo - let's pull all refs from it to our backup refs namespace
+                gitrepo = pathjoin(dirpath, dirname)
+
+                info('# git  %s\t<- %s' % (prefix, gitrepo))
+                # NOTE --no-tags : do not try to autoextend commit -> covering tag
+                xgit('fetch', '--no-tags', gitrepo,
+                        'refs/*:%s%s/*' % (backup_refs_work,
+                            # NOTE repo name is quoted as it can contain spaces, and refs must not
+                            quote(reprefix(dir_, prefix, gitrepo))),
+                            # TODO do not show which ref we pulled - show only pack transfer progress
+                            stderr=gitprogress())
+
+                # XXX do we want to fsck source git repo on pull ?
+
+
+            # do not recurse into dirs so marked
+            removeall(dirnames, None)
+
+
+
+    # all refs from all found git repositories populated.
+    # now prepare manifest with ref -> sha1 and do a synthetic commit merging all that sha1
+    # (so they become all reachable from HEAD -> survive repack and be transferable on git pull)
+    #
+    # NOTE we handle tag/tree/blob objects specially - because these objects cannot
+    # be in commit parents, we convert them to specially-crafted commits and use them.
+    # The commits prepared contain full info how to restore origianl objects.
+
+    # backup.refs format:
+    #
+    #   1eeb0324 <prefix>/wendelin.core.git/heads/master
+    #   213a9243 <prefix>/wendelin.core.git/tags/v0.4 <213a9243-converted-to-commit>
+    #   ...
+    #
+    # NOTE `git for-each-ref` sorts output by ref
+    #      -> backup_refs is sorted and stable between runs
+    backup_refs_list = xgit('for-each-ref', backup_refs_work)
+    backup_refs = []            # backup.refs content
+    backup_refs_parents = set() # sha1 for commit parents, obtained from refs
+    noncommit_seen = {}         # {} sha1 -> sha1_ (there are many duplicate tags)
+    for _ in backup_refs_list.splitlines():
+        sha1, type_, ref = _.split()
+        backup_refs_entry = '%s %s' % (sha1, strip_prefix(backup_refs_work, ref))
+
+        # represent tag/tree/blob as specially crafted commit, because we
+        # cannot use it as commit parent.
+        sha1_ = sha1
+        if type_ != 'commit':
+            #info('obj_as_commit %s  %s\t%s' % (sha1, type_, ref))  XXX
+            sha1_ = noncommit_seen.get(sha1)
+            if sha1_ is None:
+                sha1_ = obj_represent_as_commit(sha1, type_)
+                noncommit_seen[sha1] = sha1_
+
+            backup_refs_entry += ' %s' % sha1_
+
+        backup_refs.append(backup_refs_entry)
+
+        if sha1_ not in backup_refs_parents:  # several refs can refer to the same sha1
+            backup_refs_parents.add(sha1_)
+
+    backup_refs = '\n'.join(backup_refs)
+    backup_refs_parents = list(backup_refs_parents)
+    backup_refs_parents.sort()  # so parents order is stable in between runs
+
+    # backup_refs -> blob
+    backup_refs_sha1 = xgit('hash-object', '-w', '--stdin', stdin=backup_refs)
+
+    # add backup_refs blob to index
+    xgit('update-index', '--add', '--cacheinfo', '100644,%s,backup.refs' % backup_refs_sha1)
+
+
+    # index is ready - prepare tree and commit
+    backup_tree_sha1 = xgit('write-tree')
+
+    HEAD = xgit('rev-parse', 'HEAD')
+    commit_sha1 = xcommit_tree(backup_tree_sha1, [HEAD] + backup_refs_parents,
+            'Git-backup %s' % backup_time)
+
+    xgit('update-ref', '-m', 'git-backup pull', 'HEAD', commit_sha1, HEAD)
+
+
+    # remove no-longer needed backup refs & verify they don't stay
+    backup_refs_delete = ''
+    for _ in backup_refs_list.splitlines():
+        sha1, type_, ref = _.split()
+        backup_refs_delete += 'delete %s %s\n' % (ref, sha1)
+
+    xgit('update-ref', '--stdin', stdin=backup_refs_delete)
+    _ = xgit('for-each-ref', backup_refs_work)
+    if _:
+        raise RuntimeError('Backup refs under %s not deleted properly' % backup_refs_work)
+
+
+    # if we have working copy - update it
+    bare = xgit('rev-parse', '--is-bare-repository')
+    bare = (bare == 'true')
+    if not bare:
+        # `git checkout-index -af`  -- does not delete deleted files
+        # `git read-tree -v -u --reset HEAD~ HEAD`  -- needs index matching
+        # original worktree to properly work, but we already have updated index
+        #
+        # so we get changes we committed as diff and apply to worktree
+        diff = xgit('diff', '--binary', HEAD, 'HEAD', raw=True)
+        if diff:
+            diffstat = xgit('apply', '--stat', '--apply', '--binary', '--whitespace=nowarn',
+                            stdin=diff, raw=True)
+            info(diffstat)
+
+    # we are done - unlock
+    xgit('update-ref', '-d', backup_lock)
+
+
+# git-backup restore
+def cmd_restore_usage(f):
+    print >>f,  \
+"""git-backup restore <commit-ish> <prefix1>:<dir1> <prefix2>:<dir2> ...
+
+Restore Git repositories & just files from backup prefix1 into dir1,
+from backup prefix2 into dir2, etc...
+
+Backup state to restore is taken from <commit-ish>.
+"""
+
+def cmd_restore(argv):
+    try:
+        optv, argv = getopt(argv, "h", ["help"])
+    except GetoptError as e:
+        print(e)
+        cmd_restore_usage(sys.stderr)
+        exit(1)
+
+    for opt, arg in optv:
+        if   opt in ("-h", "--help"):
+            cmd_restore_usage(sys.stdout)
+            exit(0)
+
+    if len(argv) < 2:
+        cmd_restore_usage(sys.stderr)
+        exit(1)
+
+    HEAD = argv[0]
+
+    restorespecv = []   # [] of (prefix,dir)
+    for _ in argv[1:]:
+        try:
+            prefix, dir_ = _.split(':')
+        except ValueError:
+            print >>sys.stderr, "E: invalid restorespec '%s'" % _
+            cmd_restore_usage(sys.stderr)
+            exit(1)
+
+        restorespecv.append( (prefix, dir_) )
+
+    cmd_restore_(HEAD, restorespecv)
+
+
+# kirr/wendelin.core.git/heads/master -> kirr/wendelin.core.git
+# tiwariayush/Discussion%20Forum%20.git/... -> tiwariayush/Discussion Forum .git
+def ref_to_repo(ref):
+    dotgit = ref.find('.git/')
+    if dotgit == -1:
+        raise RuntimeError('E: %s is not a ref for a git repo')
+    repo = ref[:dotgit+4]
+    repo = unquote(repo)    # unquote repo name we originally quoted when making backup
+    return repo
+
+
+# sha1 value(s) for a ref in 'backup.refs'
+class BackupRefSha1:
+    # .sha1     -- original sha1 this ref was pointing to in original repo
+    # .sha1_    -- sha1 actually used to represent sha1's object in backup repo
+    #              (for tag/tree/blob - they are converted to commits)
+    def __init__(self, sha1, sha1_):
+        self.sha1  = sha1
+        self.sha1_ = sha1_
+
+
+def cmd_restore_(HEAD, restorespecv):
+    HEAD = xgit('rev-parse', '--verify', HEAD)
+
+    # read backup refs index
+    backup_refs  = {}    # prefix+ref -> BackupRefSha1
+    backup_refs_ = xgit('cat-file', 'blob', '%s:backup.refs' % HEAD)
+    for _ in backup_refs_.splitlines():
+        # sha1 prefix+refname (sha1_)
+        refentryv = _.split()
+        if len(refentryv) not in (2,3):
+            raise RuntimeError('E: invalid entry in backup.refs: %s' % _)
+        sha1, ref = refentryv[:2]
+        sha1_ = refentryv[2] if len(refentryv) == 3 else sha1
+        if ref in backup_refs:
+            raise RuntimeError('E: duplicate ref %s in backup.refs' % ref)
+        backup_refs[ref] = BackupRefSha1(sha1, sha1_)
+
+
+    # walk over specified prefixes restoring files and packs in *.git
+    for prefix, dir_ in restorespecv:
+        if pathexists(dir_):
+            raise RuntimeError('E: %s already exists' % dir_)
+
+        # files
+        lstree = xgit('ls-tree', '--full-tree', '-r', '-z', '--', HEAD, prefix, raw=True)
+        for _ in lstree.split('\0'):
+            if not _:
+                continue    # last empty line after last \0
+            # NOTE maxsplit=3 because filename can contain spaces
+            mode, type_, sha1, filename = _.split(None, 3)
+            assert type_ == 'blob'
+            mode = int(mode, 8)
+            filename = reprefix(prefix, dir_, filename)
+            info('# file %s\t-> %s' % (prefix, filename))
+            blob_to_file(sha1, mode, filename)
+
+
+        # git packs
+        refs  = set(_ for _ in backup_refs.keys() if _.startswith('%s/' % prefix))
+        repos = set(ref_to_repo(_) for _ in refs)
+
+        for repo in sorted(repos):  # NOTE sorted - to process repos always in the same order
+            repopath = reprefix(prefix, dir_, repo)
+            info('# git  %s\t-> %s' % (prefix, repopath))
+
+            # make sure git will recognize this dir as repo
+            # (refs could all be packed and thus no heads/ and tags/ dirs created on files restore)
+            mkdir_p('%s/refs/heads' % repopath)
+            mkdir_p('%s/refs/tags'  % repopath)
+
+            # {} ref -> BackupRefSha1  for this repo
+            repo_refs = dict((reprefix(repo, 'refs', _), backup_refs[_])
+                                    for _ in refs if _.startswith(repo))
+
+            # make sure tag/tree/blob objects represented as commits are
+            # present, before we generate pack for restored repo.
+            # ( such objects could be lost e.g. after backup repo repack as they
+            #   are not reachable from backup repo HEAD )
+            for _ in repo_refs.values():
+                if _.sha1 != _.sha1_:
+                    obj_recreate_from_commit(_.sha1_)
+
+            # extract pack for that repo from big backup pack + decoded tags
+            mkdir_p('%s/objects/pack' % repopath)
+            pack_argv = ['pack-objects',
+                    '--revs',   # include all objects referencable from input sha1 list
+                    '--reuse-object', '--reuse-delta', '--delta-base-offset']
+            if not verbose:
+                pack_argv += ['-q']
+            pack_argv += ['%s/objects/pack/pack' % repopath]
+
+            repo_sha1_heads = '\n'.join(set(_.sha1 for _ in repo_refs.values()))
+            xgit(*pack_argv, stdin=repo_sha1_heads, stderr=gitprogress())
+
+            # verify that extracted repo refs match backup.refs index after extraction
+            x_ref_list = xgit('--git-dir=%s' % repopath,
+                              'for-each-ref', '--format=%(objectname) %(refname)')
+            repo_ref_list = '\n'.join( ['%s %s' % (repo_refs[_].sha1, _)
+                                                    for _ in sorted(repo_refs)] )
+            if x_ref_list != repo_ref_list:
+                raise RuntimeError('E: extracted repository refs corrupt')
+
+
+            # check connectivity in recreated repository.
+            #
+            # This way we verify that extracted pack indeed contains all
+            # objects for all refs in the repo.
+            #
+            # Compared to fsck we do not re-compute sha1 sum of objects which
+            # is significantly faster.
+            x_heads_sha1 = set(_.sha1  for _ in repo_refs.values())
+            x_heads_sha1 = '\n'.join(x_heads_sha1)
+            try:
+                xgit('--git-dir=%s' % repopath,
+                     'rev-list', '--objects', '--stdin', '--quiet', stdin=x_heads_sha1)
+            except:
+                print >>sys.stderr, 'E: Problem while checking connectivity of extracted repo:'
+                raise
+
+
+            # XXX disabled because it is slow
+            # # NOTE progress goes to stderr, problems go to stdout
+            # xgit('--git-dir=%s' % repopath, 'fsck',
+            #         # only check that traversal from refs is ok: this unpacks
+            #         # commits and trees and verifies blob objects are there,
+            #         # but do _not_ unpack blobs =fast.
+            #         '--connectivity-only',
+            #         stdout=gitprogress(), stderr=gitprogress())
+
+
+
+commands = {
+    'pull':     cmd_pull,
+    'restore':  cmd_restore,
+}
+
+
+def usage(f):
+    print >>f,  \
+"""git-backup [options] <command>
+
+    pull        pull git-repositories and files to backup
+    restore     restore git-repositories and files from backup
+
+  common options:
+
+    -h --help        this help text.
+    -v --verbose     increase verbosity.
+    -q --quiet       decrease verbosity.
+"""
+
+def main():
+    global verbose
+
+    try:
+        optv, argv = getopt(sys.argv[1:], "hvq", ["help", "verbose", "quiet"])
+    except GetoptError as e:
+        print(e)
+        usage(sys.stderr)
+        exit(1)
+
+    for opt, arg in optv:
+        if   opt in ("-h", "--help"):
+            usage(sys.stdout)
+            exit(0)
+
+        elif opt in ("-v", "--verbose"):
+            verbose += 1
+
+        elif opt in ("-q", "--quiet"):
+            verbose -= 1
+
+    if not argv:
+        usage(sys.stderr)
+        exit(1)
+
+    cmd  = commands.get(argv[0])
+    if not cmd:
+        print >>sys.stderr, "E: unknown command %r" % argv[0]
+        exit(1)
+
+    cmd(argv[1:])
+
+
+if __name__ == '__main__':
+    main()
