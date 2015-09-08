@@ -476,7 +476,7 @@ def cmd_pull_(pullspecv):
     #
     # NOTE we handle tag/tree/blob objects specially - because these objects cannot
     # be in commit parents, we convert them to specially-crafted commits and use them.
-    # The commits prepared contain full info how to restore origianl objects.
+    # The commits prepared contain full info how to restore original objects.
 
     # backup.refs format:
     #
