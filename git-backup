@@ -60,7 +60,7 @@ NOTE the idea of pulling all refs together is similar to git-namespaces
 
 import os
 import sys
-from os.path import join as pathjoin, exists as pathexists, dirname
+from os.path import join as pathjoin, exists as pathexists, dirname, islink
 from time import strftime
 from subprocess import Popen, PIPE
 from stat import S_ISLNK
@@ -120,10 +120,18 @@ def xgit(*argv, **kw):
     return stdout
 
 
-# like os.walk() but raise on error + entries are emitted in sorted order
+# like os.walk() but raise on error + entries are emitted in sorted order;
+# symlinks (both to files and directories) are always yielded in filenames
 def reraise(e): raise e
 def xwalk(top):
     for dirpath, dirnames, filenames in os.walk(top, onerror=reraise):
+        # os.walk yields symlinks to dirs in dirnames - move them to files
+        for i, _ in  enumerate(dirnames):
+            if islink(pathjoin(dirpath, _)):
+                filenames.append(_)
+                dirnames[i] = None
+        removeall(dirnames, None)
+
         dirnames.sort();  filenames.sort()
         yield dirpath, dirnames, filenames
 
