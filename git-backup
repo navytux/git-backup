@@ -455,14 +455,16 @@ def cmd_pull_(pullspecv):
 
                 info('# git  %s\t<- %s' % (prefix, gitrepo))
                 # NOTE --no-tags : do not try to autoextend commit -> covering tag
-                xgit('fetch', '--no-tags', gitrepo,
+                # NOTE fetch.fsckObjects=true : check objects for corruption as they are fetched
+                xgit('-c', 'fetch.fsckObjects=true',
+                     'fetch', '--no-tags', gitrepo,
                         'refs/*:%s%s/*' % (backup_refs_work,
                             # NOTE repo name is quoted as it can contain spaces, and refs must not
                             quote(reprefix(dir_, prefix, gitrepo))),
                             # TODO do not show which ref we pulled - show only pack transfer progress
                             stderr=gitprogress())
 
-                # XXX do we want to fsck source git repo on pull ?
+                # XXX do we want to do full fsck of source git repo on pull as well ?
 
 
             # do not recurse into dirs so marked
