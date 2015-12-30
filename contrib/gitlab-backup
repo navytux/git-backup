@@ -55,6 +55,11 @@ backup_pull() {
     mkdir "$tmpd/gitlab_backup"
     tar -C "$tmpd/gitlab_backup" -xf "$backup_tar"
     gzip -d "$tmpd/gitlab_backup/db/database.sql.gz"  # unzip so it is better stored in git
+    # unpack tarballs so files are better stored in git
+    find "$tmpd/gitlab_backup" -maxdepth 1 -type f -name "*.tar.gz" -exec   \
+        sh -c 'mv {} {}.x && mkdir {} && tar xf {}.x -C {} && rm {}.x' ';'
+    find "$tmpd/gitlab_backup" -maxdepth 1 -type d -name "*.tar.gz" -empty -exec    \
+        touch {}/.gitlab-backup-keep ';'
 
 
     # 3. pull gitlab data into git-backup
@@ -82,6 +87,11 @@ backup_restore() {
 
     $GIT_BACKUP restore $HEAD gitlab/misc:"$tmpd/gitlab_backup"
     gzip "$tmpd/gitlab_backup/db/database.sql"  # gzip sql dump, as gitlab expects .gz
+    # recreate tarballs from *.tar.gz directories
+    find "$tmpd/gitlab_backup" -maxdepth 1 -type d -name "*.tar.gz" -exec   \
+        rm -f {}/.gitlab-backup-keep ';'
+    find "$tmpd/gitlab_backup" -maxdepth 1 -type d -name "*.tar.gz" -exec   \
+        sh -c 'mv {} {}.x && tar cfz {} -C {}.x . && rm -rf {}.x' ';'
 
     # 2. find out backup timestamp as saved by gitlab
     backup_created_at=`grep :backup_created_at: "$tmpd/gitlab_backup/backup_information.yml" |
