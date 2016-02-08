@@ -26,8 +26,8 @@ need_gitlab_config() {
 
     # various gitlab config values extracted in 1 go (gitlab is very slow to load)
     {
-        read GITLAB_BACKUP_PATH;
-        read GITLAB_REPOS_PATH;
+        read GITLAB_BACKUP_PATH
+        read GITLAB_REPOS_PATH
     } < <(gitlab-rails r 'puts Gitlab.config.backup.path, Gitlab.config.gitlab_shell.repos_path')
 
     test -n "$GITLAB_BACKUP_PATH"   || die "E: cannot detect GITLAB_BACKUP_PATH"
