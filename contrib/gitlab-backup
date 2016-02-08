@@ -49,7 +49,7 @@ backup_pull() {
 
     # 1. dump all gitlab data except repositories
     echo " * Dumping gitlab data (except repositories)"
-    tmpd=`mktemp -d gitlab-backup.XXXXXX`
+    tmpd=$(mktemp -d `pwd`/gitlab-backup.XXXXXX)
     gitlab-rake gitlab:backup:create SKIP=repositories | tee "$tmpd/gitlab_backup_create.out"
     backup_tar=`grep "^Creating backup archive: .* done" "$tmpd/gitlab_backup_create.out"` || \
         die "E: Cannot detect backup tar"
@@ -98,7 +98,7 @@ backup_restore() {
 
     # 1. extract all gitlab data except repositories
     echo " * Extracting gitlab data (except repositories)"
-    tmpd=`mktemp -d gitlab-backup.XXXXXX`
+    tmpd=$(mktemp -d `pwd`/gitlab-backup.XXXXXX)
 
     $GIT_BACKUP restore $HEAD gitlab/misc:"$tmpd/gitlab_backup"
     gzip "$tmpd/gitlab_backup/db/database.sql"  # gzip sql dump, as gitlab expects .gz
