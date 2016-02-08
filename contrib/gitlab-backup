@@ -21,6 +21,13 @@ die() {
 GITLAB_BACKUP_PATH=
 GITLAB_REPOS_PATH=
 
+# database name & PostgreSQL settings how to connect to server
+GITLAB_DATABASE=
+export PGUSER=
+export PGHOST=
+export PGPORT=
+export PGPASSWORD=
+
 need_gitlab_config() {
     test -n "$GITLAB_BACKUP_PATH" && return
 
@@ -29,17 +36,32 @@ need_gitlab_config() {
         read GITLAB_BACKUP_PATH
         read GITLAB_REPOS_PATH
 
+        read GITLAB_DATABASE
+        read gitlab_db_adapter
+        test -n "$gitlab_db_adapter"    || die "E: cannot detect GitLab DB adapter"
+        test "$gitlab_db_adapter" == "postgresql" || \
+            die "E: only postgresql is supported (gitlab db is $gitlab_db_adapter)"
+        read PGUSER
+        read PGHOST
+        read PGPORT
+        read PGPASSWORD
+
         read END
     } < <(gitlab-rails r '
         c = Gitlab.config
         s = c.gitlab_shell
         puts c.backup.path, s.repos_path
 
+        c = Backup::Database.new.config
+        puts c["database"]
+        puts c["adapter"], c["username"], c["host"], c["port"], c["password"]
+
         puts "END"
     ')
 
     test -n "$GITLAB_BACKUP_PATH"   || die "E: cannot detect GITLAB_BACKUP_PATH"
     test -n "$GITLAB_REPOS_PATH"    || die "E: cannot detect GITLAB_REPOS_PATH"
+    test -n "$GITLAB_DATABASE"      || die "E: cannot detect GITLAB_DATABASE"
     test "$END" == "END"            || die "E: self-consistency failure (END)"
 }
 
@@ -47,10 +69,10 @@ need_gitlab_config() {
 backup_pull() {
     need_gitlab_config
 
-    # 1. dump all gitlab data except repositories
-    echo " * Dumping gitlab data (except repositories)"
+    # 1. dump all gitlab data except repositories & db
+    echo " * Dumping gitlab data (except repositories & db)"
     tmpd=$(mktemp -d `pwd`/gitlab-backup.XXXXXX)
-    gitlab-rake gitlab:backup:create SKIP=repositories | tee "$tmpd/gitlab_backup_create.out"
+    gitlab-rake gitlab:backup:create SKIP=repositories,db | tee "$tmpd/gitlab_backup_create.out"
     backup_tar=`grep "^Creating backup archive: .* done" "$tmpd/gitlab_backup_create.out"` || \
         die "E: Cannot detect backup tar"
 
@@ -63,7 +85,6 @@ backup_pull() {
     # 2. unpack backup_tar so it is ready to be pulled into git-backup
     mkdir "$tmpd/gitlab_backup"
     tar -C "$tmpd/gitlab_backup" -xf "$backup_tar"
-    gzip -d "$tmpd/gitlab_backup/db/database.sql.gz"  # unzip so it is better stored in git
     # unpack tarballs so files are better stored in git
     find "$tmpd/gitlab_backup" -maxdepth 1 -type f -name "*.tar.gz" | \
     while read tar; do
@@ -77,7 +98,14 @@ backup_pull() {
     done
 
 
-    # 3. pull gitlab data into git-backup
+    # 3. dump database ...
+    echo " * Dumping database"
+    mkdir -p "$tmpd/gitlab_backup/db"
+    db_pgdump="$tmpd/gitlab_backup/db/database.pgdump"
+    gitlab-rake -e "exec \"pg_dump -Fd -Z0 -f \\"$db_pgdump\\" $GITLAB_DATABASE\""
+
+
+    # 4. pull gitlab data into git-backup
     # gitlab/misc   - db + uploads + ...
     # gitlab/repo   - git repositories
     echo " * git-backup pull everything"
@@ -101,7 +129,8 @@ backup_restore() {
     tmpd=$(mktemp -d `pwd`/gitlab-backup.XXXXXX)
 
     $GIT_BACKUP restore $HEAD gitlab/misc:"$tmpd/gitlab_backup"
-    gzip "$tmpd/gitlab_backup/db/database.sql"  # gzip sql dump, as gitlab expects .gz
+    backup_info="$tmpd/gitlab_backup/backup_information.yml"
+
     # recreate tarballs from *.tar.gz directories
     find "$tmpd/gitlab_backup" -maxdepth 1 -type d -name "*.tar.gz" | \
     while read tar; do
@@ -112,8 +141,21 @@ backup_restore() {
         rm -rf $tar.x
     done
 
+    # if backup is in pgdump (not sql) format - decode it
+    db_pgdump="$tmpd/gitlab_backup/db/database.pgdump"
+    if [ -d "$db_pgdump" ]; then
+        # convert database dump to plain-text sql (as gitlab restore expects)
+        gitlab-rake -e "exec \"pg_restore --clean \\"$db_pgdump\\" >$tmpd/gitlab_backup/db/database.sql \""
+        rm -rf "$db_pgdump"
+
+        # tweak gitlab's backup_information.yml so it says db is included in the backup
+        sed -i -e 's/:skipped: repositories,db/:skipped: repositories/' "$backup_info"
+    fi
+
+    gzip "$tmpd/gitlab_backup/db/database.sql"  # gzip sql dump, as gitlab expects .gz
+
     # 2. find out backup timestamp as saved by gitlab
-    backup_created_at=`grep :backup_created_at: "$tmpd/gitlab_backup/backup_information.yml" |
+    backup_created_at=`grep :backup_created_at: "$backup_info" |
                         sed -e s'/:backup_created_at: //'`
     # 2015-08-27 11:32:37.201345216 +02:00 -> 1440667957
     backup_created_at=`echo "$backup_created_at" |
