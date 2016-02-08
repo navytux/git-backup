@@ -28,10 +28,19 @@ need_gitlab_config() {
     {
         read GITLAB_BACKUP_PATH
         read GITLAB_REPOS_PATH
-    } < <(gitlab-rails r 'puts Gitlab.config.backup.path, Gitlab.config.gitlab_shell.repos_path')
+
+        read END
+    } < <(gitlab-rails r '
+        c = Gitlab.config
+        s = c.gitlab_shell
+        puts c.backup.path, s.repos_path
+
+        puts "END"
+    ')
 
     test -n "$GITLAB_BACKUP_PATH"   || die "E: cannot detect GITLAB_BACKUP_PATH"
     test -n "$GITLAB_REPOS_PATH"    || die "E: cannot detect GITLAB_REPOS_PATH"
+    test "$END" == "END"            || die "E: self-consistency failure (END)"
 }
 
 
