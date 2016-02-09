@@ -152,6 +152,19 @@ backup_pull() {
         rm -f $F.data{,.x} $F.tail{,.x}
     done
 
+    # ... split each table to parts <= 16M in size
+    # so we do not store very large blobs in git (with which it is inefficient)
+    find "$db_pgdump" -maxdepth 1 -type f -name "*.dat" -a \! -name toc.dat | \
+    while read F; do
+        mv $F $F.x
+        mkdir $F
+        split -C 16M $F.x $F/`basename $F`.
+        md5=`md5sum <$F.x`
+        md5_=`cat $F/* | md5sum`
+        test "$md5" = "$md5_" || die "E: md5 mismatch after $F split"
+        rm $F.x
+    done
+
 
     # 4. pull gitlab data into git-backup
     # gitlab/misc   - db + uploads + ...
@@ -192,6 +205,14 @@ backup_restore() {
     # if backup is in pgdump (not sql) format - decode it
     db_pgdump="$tmpd/gitlab_backup/db/database.pgdump"
     if [ -d "$db_pgdump" ]; then
+        # merge splitted database dump files
+        find "$db_pgdump" -maxdepth 1 -type d -name "*.dat" | \
+        while read F; do
+            mv $F $F.x
+            cat $F.x/* >$F
+            rm -rf "$F.x"
+        done
+
         # convert database dump to plain-text sql (as gitlab restore expects)
         gitlab-rake -e "exec \"pg_restore --clean \\"$db_pgdump\\" >$tmpd/gitlab_backup/db/database.sql \""
         rm -rf "$db_pgdump"
