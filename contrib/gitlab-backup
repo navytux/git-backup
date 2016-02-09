@@ -18,6 +18,7 @@ die() {
 }
 
 
+GITLAB_VERSION=
 GITLAB_BACKUP_PATH=
 GITLAB_REPOS_PATH=
 GITLAB_HOOKS_PATH=
@@ -34,6 +35,7 @@ need_gitlab_config() {
 
     # various gitlab config values extracted in 1 go (gitlab is very slow to load)
     {
+        read GITLAB_VERSION
         read GITLAB_BACKUP_PATH
         read GITLAB_REPOS_PATH
         read GITLAB_HOOKS_PATH
@@ -52,7 +54,7 @@ need_gitlab_config() {
     } < <(gitlab-rails r '
         c = Gitlab.config
         s = c.gitlab_shell
-        puts c.backup.path, s.repos_path, s.hooks_path
+        puts Gitlab::VERSION, c.backup.path, s.repos_path, s.hooks_path
 
         c = Backup::Database.new.config
         puts c["database"]
@@ -184,6 +186,7 @@ backup_pull() {
 
 backup_restore() {
     HEAD=$1
+    vupok=$2
 
     need_gitlab_config
 
@@ -229,6 +232,26 @@ backup_restore() {
     fi
 
     gzip "$tmpd/gitlab_backup/db/database.sql"  # gzip sql dump, as gitlab expects .gz
+
+    # tweak gitlab_version in backup_information.yml if vup is ok
+    # ( rationale for doing so:
+    #   1. git-backup cares backward compatibility for format of repositories backup.
+    #   2. db dump is backward compatible, because Rails, when seeing old db
+    #      schema, will run migrations.
+    #   3. the rest is relatively minor - e.g. uploads, which is just files in
+    #      tar, and format for such things changes seldomly.
+    #
+    #   because of 3, strictly speaking, it is not 100% correct to restore
+    #   backup from older gitlab version to newer one, but in practice it is
+    #   99% correct and is usually handy. )
+    if [ $vupok = y ]; then
+        # put current gitlab version into backup_information.yml if it is >=
+        # gitlab version used at backup time.
+        backup_gitlab_version=`grep "^:gitlab_version:" "$backup_info" | sed -e 's/:gitlab_version:\s*//'`
+        if echo -e "$backup_gitlab_version\n$GITLAB_VERSION" | sort -V -C ; then
+            sed -i -e "s/^:gitlab_version:.*\$/:gitlab_version: $GITLAB_VERSION/" "$backup_info"
+        fi
+    fi
 
     # 2. find out backup timestamp as saved by gitlab
     backup_created_at=`grep :backup_created_at: "$backup_info" |
@@ -297,7 +320,7 @@ umask 0077    # XXX maybe not good - e.g. git-data/repositories should (?) be rw
 
 
 usage() {
-    echo "Usage: gitlab-backup [pull | restore <commit-ish>]"
+    echo "Usage: gitlab-backup [pull | restore (-vupok) <commit-ish>]"
 }
 
 
@@ -310,8 +333,24 @@ case "$action" in
         backup_pull
         ;;
     restore)
+        vupok=n     # gitlab version >= backup's gitlab version is ok
+        while test $# != 0; do
+            case "$1" in
+            -vupok)
+                vupok=y
+                ;;
+            -*)
+                die `usage`
+                ;;
+            *)
+                break
+                ;;
+            esac
+            shift
+        done
+
         test $# -lt 1 && die `usage`
-        backup_restore "$1"
+        backup_restore "$1" $vupok
         ;;
     -h)
         usage
