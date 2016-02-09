@@ -104,6 +104,54 @@ backup_pull() {
     db_pgdump="$tmpd/gitlab_backup/db/database.pgdump"
     gitlab-rake -e "exec \"pg_dump -Fd -Z0 -f \\"$db_pgdump\\" $GITLAB_DATABASE\""
 
+    # ... sort each table data
+    #
+    # pg_dump dumps table data with `COPY ... TO stdout` which does not guaranty any ordering -
+    #   http://git.postgresql.org/gitweb/?p=postgresql.git;a=blob;f=src/bin/pg_dump/pg_dump.c;h=aa01d6a6;hb=HEAD#l1590
+    #   http://stackoverflow.com/questions/24622579/does-or-can-the-postgresql-copy-to-command-guarantee-a-particular-row-order
+    # - in fact it dumps data as stored raw in DB pages, and every record update changes row order.
+    #
+    # On the other hand, Rails by default adds integer `id` first column to
+    # every table as convention -
+    #   http://edgeguides.rubyonrails.org/active_record_basics.html
+    # and GitLab does not override this. So we can sort tables on id and this
+    # way make data order stable.
+    #
+    # ( and even if there is no id column we can sort - as COPY does not
+    #   guarantee ordering, we can change the order of rows in _whatever_ way and
+    #   the dump will still be correct )
+    find "$db_pgdump" -maxdepth 1 -type f -name "*.dat" -a \! -name toc.dat | \
+    while read F; do
+        # split file into data with numeric-start lines and tail with non-numeric lines
+        touch $F.tail
+        ntail=1
+        while true; do
+            tail --lines $ntail $F > $F.tail.x
+            test "$ntail" == "`wc -l <$F.tail.x`"   || break   # no data part at all ?
+            head -1 $F.tail.x | grep -q '^[0-9]\+'  && break   # first data line
+
+            # this line was non-numeric too - prepare for next iteration
+            mv $F.tail.x $F.tail
+            ntail=$(($ntail + 1))
+        done
+        ntail=`wc -l <$F.tail`
+        head --lines=-$ntail $F >$F.data
+
+        # sort data part
+        sort -n $F.data >$F.data.x
+
+        # re-glue data & tail together
+        cat $F.data.x $F.tail >$F.x
+
+        # assert #lines stayed the same (just in case)
+        nline=$(wc -l <$F)
+        nlinex=$(wc -l <$F.x)
+        test "$nline" == "$nlinex" || die "E: assertion failed while sorting $F"
+
+        mv $F.x $F
+        rm -f $F.data{,.x} $F.tail{,.x}
+    done
+
 
     # 4. pull gitlab data into git-backup
     # gitlab/misc   - db + uploads + ...
