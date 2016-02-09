@@ -20,6 +20,7 @@ die() {
 
 GITLAB_BACKUP_PATH=
 GITLAB_REPOS_PATH=
+GITLAB_HOOKS_PATH=
 
 # database name & PostgreSQL settings how to connect to server
 GITLAB_DATABASE=
@@ -35,6 +36,7 @@ need_gitlab_config() {
     {
         read GITLAB_BACKUP_PATH
         read GITLAB_REPOS_PATH
+        read GITLAB_HOOKS_PATH
 
         read GITLAB_DATABASE
         read gitlab_db_adapter
@@ -50,7 +52,7 @@ need_gitlab_config() {
     } < <(gitlab-rails r '
         c = Gitlab.config
         s = c.gitlab_shell
-        puts c.backup.path, s.repos_path
+        puts c.backup.path, s.repos_path, s.hooks_path
 
         c = Backup::Database.new.config
         puts c["database"]
@@ -245,6 +247,11 @@ backup_restore() {
     # gitlab wants repositories to be drwxrws---
     chmod u=rwx,g=rwxs,o=--- "$reposX"
 
+    # adjust hooks links to point to current gitlab-shell location
+    find "$reposX" -type l -path "*.git/hooks" | \
+    while read H; do
+        ln -sf "$GITLAB_HOOKS_PATH" "$H"
+    done
 
     # extraction complete - now proceed with actual backup restore
     # (which is mv repositories dir + load db)
