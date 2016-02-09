@@ -30,6 +30,7 @@ export PGHOST=
 export PGPORT=
 export PGPASSWORD=
 
+# make sure gitlab is configured and read what we need from its config
 need_gitlab_config() {
     test -n "$GITLAB_BACKUP_PATH" && return
 
@@ -70,6 +71,7 @@ need_gitlab_config() {
 }
 
 
+# pull gitlab data into git-backup repository
 backup_pull() {
     need_gitlab_config
 
@@ -87,6 +89,7 @@ backup_pull() {
 
 
     # 2. unpack backup_tar so it is ready to be pulled into git-backup
+    echo " * Unpacking dump tarballs"
     mkdir "$tmpd/gitlab_backup"
     tar -C "$tmpd/gitlab_backup" -xf "$backup_tar"
     # unpack tarballs so files are better stored in git
@@ -184,6 +187,7 @@ backup_pull() {
 }
 
 
+# restore gitlab data from git-backup repository
 backup_restore() {
     HEAD=$1
     vupok=$2
@@ -270,6 +274,7 @@ backup_restore() {
     rm -rf "$tmpd"  # tmpd no longer needed
 
     # 4. extract repositories into .../repositories.<timestamp>
+    echo " * Extracting repositories"
     reposX="${GITLAB_REPOS_PATH}.${backup_created_at}"
     $GIT_BACKUP restore $HEAD gitlab/repo:"$reposX"
 
