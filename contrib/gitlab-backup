@@ -239,7 +239,11 @@ backup_restore() {
     rm -rf "$tmpd"  # tmpd no longer needed
 
     # 4. extract repositories into .../repositories.<timestamp>
-    $GIT_BACKUP restore $HEAD gitlab/repo:"${GITLAB_REPOS_PATH}.${backup_created_at}"
+    reposX="${GITLAB_REPOS_PATH}.${backup_created_at}"
+    $GIT_BACKUP restore $HEAD gitlab/repo:"$reposX"
+
+    # gitlab wants repositories to be drwxrws---
+    chmod u=rwx,g=rwxs,o=--- "$reposX"
 
 
     # extraction complete - now proceed with actual backup restore
