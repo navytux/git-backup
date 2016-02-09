@@ -194,6 +194,11 @@ backup_restore() {
     $GIT_BACKUP restore $HEAD gitlab/misc:"$tmpd/gitlab_backup"
     backup_info="$tmpd/gitlab_backup/backup_information.yml"
 
+    # gitlab wants uploads/ to be 0750 and dirs inside uploads/ to be 0755
+    chmod 0750 "$tmpd/gitlab_backup"/uploads*
+    find "$tmpd/gitlab_backup"/uploads* -mindepth 1 -type d \
+        -exec chmod 0755 {} ';'
+
     # recreate tarballs from *.tar.gz directories
     find "$tmpd/gitlab_backup" -maxdepth 1 -type d -name "*.tar.gz" | \
     while read tar; do
