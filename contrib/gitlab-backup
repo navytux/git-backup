@@ -187,6 +187,7 @@ backup_pull() {
 backup_restore() {
     HEAD=$1
     vupok=$2
+    go=$3
 
     need_gitlab_config
 
@@ -283,20 +284,49 @@ backup_restore() {
 
     # extraction complete - now proceed with actual backup restore
     # (which is mv repositories dir + load db)
+    RESTORE=$(cat << EOF
+# https://gitlab.com/gitlab-org/gitlab-ce/blob/master/doc/raketasks/backup_restore.md
+#
+# we assume gitlab services that touch git repositories and db are stopped by
+# user who invokes 'gitlab-backup restore -go ...'
+#
+# on gitlab-omnibus it can be done this way:
+#
+#   gitlab-ctl stop gitlab-workhorse
+#   gitlab-ctl stop unicorn
+#   gitlab-ctl stop sidekiq
+
+# restore repos:
+mv -b -S ".old.`date +%s`" -T "$reposX" ${GITLAB_REPOS_PATH}
+
+# restore db + other gitlab stuff:
+gitlab-rake gitlab:backup:restore BACKUP=$backup_created_at force=yes
+
+# final advice to restart and check gitlab:
+#
+#   gitlab-ctl start
+#   gitlab-rake gitlab:check SANITIZE=true
+EOF
+    )
+
     echo
     echo "Extraction complete. To actually restore data please do"
-    echo "# TODO check, and make this run automatically"
-    cat << EOF
-# https://gitlab.com/gitlab-org/gitlab-ce/blob/master/doc/raketasks/backup_restore.md
-gitlab-ctl stop unicorn
-gitlab-ctl stop sidekiq
-mv ${GITLAB_REPOS_PATH} ${GITLAB_REPOS_PATH}.old
-mv ${GITLAB_REPOS_PATH}.${backup_created_at} ${GITLAB_REPOS_PATH}
-gitlab-rake gitlab:backup:restore BACKUP=$backup_created_at
-gitlab-ctl start
-gitlab-rake gitlab:satellites:create    # will go away after gitlab 8.0
-gitlab-rake gitlab:check SANITIZE=true
-EOF
+    echo "---- 8< ----"
+    echo "$RESTORE"
+    echo "---- 8< ----"
+
+    if [ "$go" = y ]; then
+        echo
+        echo "... Actually restoring data with the above commands"
+        # run the commands with original user umask
+        # ( gitlab uses tar to unpack backup archive, and tar by default respect
+        #   umask. So even if we have correct permissiosn inside tar.gz, with
+        #   restrictive umask it will be made restrictive anyway )
+        umask_save=`umask`
+        umask $UMASK
+        eval "$RESTORE"
+        umask $umask_save
+    fi
 }
 
 
@@ -316,11 +346,12 @@ fi
 
 # we are working with potentially sensitive data
 # -> limit what could be read to current user only
+UMASK=`umask`
 umask 0077    # XXX maybe not good - e.g. git-data/repositories should (?) be rwxrwx---
 
 
 usage() {
-    echo "Usage: gitlab-backup [pull | restore (-vupok) <commit-ish>]"
+    echo "Usage: gitlab-backup [pull | restore (-vupok, -go) <commit-ish>]"
 }
 
 
@@ -334,10 +365,14 @@ case "$action" in
         ;;
     restore)
         vupok=n     # gitlab version >= backup's gitlab version is ok
+        go=n        # actually run gitlab restoration in additon to preparing backup files
         while test $# != 0; do
             case "$1" in
             -vupok)
                 vupok=y
+                ;;
+            -go)
+                go=y
                 ;;
             -*)
                 die `usage`
@@ -350,7 +385,7 @@ case "$action" in
         done
 
         test $# -lt 1 && die `usage`
-        backup_restore "$1" $vupok
+        backup_restore "$1" $vupok $go
         ;;
     -h)
         usage
