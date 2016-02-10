@@ -655,6 +655,7 @@ def cmd_restore_(HEAD, restorespecv):
 
         # files
         lstree = xgit('ls-tree', '--full-tree', '-r', '-z', '--', HEAD, prefix, raw=True)
+        repos_seen = set()  # dirs of *.git seen while restoring files
         for _ in lstree.split('\0'):
             if not _:
                 continue    # last empty line after last \0
@@ -666,6 +667,20 @@ def cmd_restore_(HEAD, restorespecv):
             info('# file %s\t-> %s' % (prefix, filename))
             blob_to_file(sha1, mode, filename)
 
+            # make sure git will recognize *.git as repo:
+            #   - it should have refs/{heads,tags}/ and objects/pack/ inside.
+            #
+            # NOTE doing it while restoring files, because a repo could be
+            #   empty - without refs at all, and thus next "git packs restore"
+            #   step will not be run for it.
+            filedir = dirname(filename)
+            if filedir.endswith('.git') and not filedir in repos_seen:
+                info('# repo %s\t-> %s' % (prefix, filedir))
+                mkdir_p('%s/refs/heads'   % filedir)
+                mkdir_p('%s/refs/tags'    % filedir)
+                mkdir_p('%s/objects/pack' % filedir)
+                repos_seen.add(filedir)
+
 
         # git packs
         refs  = set(_ for _ in backup_refs.keys() if _.startswith('%s/' % prefix))
@@ -674,11 +689,6 @@ def cmd_restore_(HEAD, restorespecv):
         for repo in sorted(repos):  # NOTE sorted - to process repos always in the same order
             repopath = reprefix(prefix, dir_, repo)
             info('# git  %s\t-> %s' % (prefix, repopath))
-
-            # make sure git will recognize this dir as repo
-            # (refs could all be packed and thus no heads/ and tags/ dirs created on files restore)
-            mkdir_p('%s/refs/heads' % repopath)
-            mkdir_p('%s/refs/tags'  % repopath)
 
             # {} ref -> BackupRefSha1  for this repo
             repo_refs = dict((reprefix(repo, 'refs', _), backup_refs[_])
@@ -693,7 +703,6 @@ def cmd_restore_(HEAD, restorespecv):
                     obj_recreate_from_commit(_.sha1_)
 
             # extract pack for that repo from big backup pack + decoded tags
-            mkdir_p('%s/objects/pack' % repopath)
             pack_argv = ['pack-objects',
                     '--revs',   # include all objects referencable from input sha1 list
                     '--reuse-object', '--reuse-delta', '--delta-base-offset']
