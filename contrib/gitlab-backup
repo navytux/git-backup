@@ -284,7 +284,7 @@ backup_restore() {
     # adjust hooks links to point to current gitlab-shell location
     find "$reposX" -type l -path "*.git/hooks" | \
     while read H; do
-        ln -sf "$GITLAB_HOOKS_PATH" "$H"
+        ln -sfT "$GITLAB_HOOKS_PATH" "$H"
     done
 
     # extraction complete - now proceed with actual backup restore
