@@ -12,6 +12,30 @@
 #
 # See COPYING file for full licensing terms.
 
+# gitlab-backup pulls/restores whole gitlab site data into/from git-backup repository.
+#
+# For this, on pull, gitlab-backup first exports all site data except
+# repositories - db and other files - to a directory, and then runs git-backup
+# with pointing it to
+#
+#   1) extracted files          # -> gitlab/misc/ prefix
+#   2) repositories             # -> gitlab/repo/ prefix
+#
+# repositories and files go(*) to appropriate prefixes in git-backup repository as
+# depicted above.
+#
+# Restore process is the opposite: repositories and files are extracted from
+# git-backup repository, and then files are passed(*) to gitlab:backup:restore
+# rake task in expected by gitlab form.
+#
+# (*) To make data git-friendly, before going into git-backup, extracted files are
+#     first unpacked and uncompressed, and db dump is stabilized for order and
+#     is split into reasonably-sized chunks.
+#
+#     On restore everything is reassembled back into form expected by gitlab
+#     native restore.
+
+
 die() {
     echo "$@" 1>&2
     exit 1
