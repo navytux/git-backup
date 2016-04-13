@@ -46,7 +46,7 @@ File permissions are not managed with strict details due to inherent
 nature of Git. This aspect can be improved with e.g. etckeeper-like
 (http://etckeeper.branchable.com/) approach if needed.
 
-Please see README.txt with user-level overview on how to use git-backup.
+Please see README.rst with user-level overview on how to use git-backup.
 
 NOTE the idea of pulling all refs together is similar to git-namespaces
      http://git-scm.com/docs/gitnamespaces
