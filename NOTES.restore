@@ -1,0 +1,90 @@
+============================================================
+ Notes on how to restore objects in optimal size & time way
+============================================================
+
+A, B, C - set of objects belonging to repository A, B, C,...
+M       - set of objects from all repositories
+
+∀ A     A ∪ !A = M          M = A ∪ B ∪ C ∪ ...
+∀ B     B ∩  M = B
+
+    ↓
+
+B = B∩(A∪!A) = B∩A ∪ B∩!A
+
+                                                    A  B  C  D  E  F ...
+ A -> 1A        ∀ obj  ∈ A, D, F ...    => obj ->   1  0  0  1  0  1 ...
+!A -> 0A               ∉ B, C, E ...                      ↓
+                                                    A∩!B∩!C∩ D∩!E∩ F ...
+
+
+
+       2^N
+-> M =  ⊕  bin(i)
+       i=0
+
+
+   bin(i) = ∩ (A or !A depending on bit in number i)
+   bin(i) ∩ bin(j) = ø  (i != j)
+
+
+bin(i) -- too much different sets - 2^N.
+
+approximation:
+
+    M = ⋃ μi        μi ∩ μj != ø    (not necessarily)
+        ⋯
+
+   N(M) ≤ ∑ N(μi)
+          ⋯
+
+   min ∑ N(μi) = N(M) <=> μi = bin(i)
+       ⋯
+   ↓
+
+we search minimum by ∇⋃μi
+                      ⋯
+∢ (μi, μj) pair:
+
+for it we have:
+
+    N(μi) + N(μj)   in  ∑ N(μ.)
+                        ⋯
+
+      μi  ∪   μj    in  ⋃ μ.
+                        ⋯
+if we split
+
+    μi, μj → μi∩!μj,  μj∩!μi,  μi∩μj
+
+gradient is
+
+    ∇ij ⋃μ.  = -N(μi∩μj)
+        ⋯
+
+
+( proof:
+
+  A∪B = A∩!B ∪ B∩!A ∪ A∩B
+
+  N(A) = N(A∩(B∪!B)) = N(A∩B) + N(A∩!B)
+  N(B) =    ...      = N(A∩B) + N(B∩!A)
+
+  -> N(A)+N(B) = N(A∩!B) + N(B∩!A) + 2⋅N(A∩B)
+
+  but after splitting A,B we have
+
+                 N(A∩!B) + N(B∩!A) + 1⋅N(A∩B)
+
+  so the delta is -N(A∩B).
+
+  now A=μi, B=μj )
+
+   ↓
+
+we find i,j for which N(μi∩μj) is max and split that pair. Then algorithm
+continues. The algorithm is greedy - it can find minimum, but instead of global
+a local one. We have a way to control how far absolute minimum is away
+(comparing to N(M))
+
+TODO Comparing N(μi∩μj) is O(n^2) -> heuristics to limit to O(n)
