@@ -729,11 +729,9 @@ def cmd_restore_(HEAD, restorespecv):
             #
             # Compared to fsck we do not re-compute sha1 sum of objects which
             # is significantly faster.
-            x_heads_sha1 = set(_.sha1  for _ in repo_refs.values())
-            x_heads_sha1 = '\n'.join(x_heads_sha1)
             try:
                 xgit('--git-dir=%s' % repopath,
-                     'rev-list', '--objects', '--stdin', '--quiet', stdin=x_heads_sha1)
+                     'rev-list', '--objects', '--stdin', '--quiet', stdin=repo_sha1_heads)
             except:
                 print >>sys.stderr, 'E: Problem while checking connectivity of extracted repo:'
                 raise
