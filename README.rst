@@ -57,6 +57,5 @@ instance into/from git-backup managed repository. See `contrib/gitlab-backup`__
 for details.
 
 
-.. links are made so they show ok on project main page
-__ /kirr/git-backup/blob/master/git-backup
-__ /kirr/git-backup/blob/master/contrib/gitlab-backup
+__ git-backup
+__ contrib/gitlab-backup
