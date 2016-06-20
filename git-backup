@@ -535,6 +535,15 @@ def cmd_pull_(pullspecv):
 
 
     # remove no-longer needed backup refs & verify they don't stay
+    # FIXME `delete` deletes only files, but leaves empty dirs around.
+    #       more important: this affect performance of future `git-backup pull` run a *LOT*
+    #
+    #       reason is: `git pull` first check local refs, and for doing so it
+    #       recourse into all directories, even empty ones.
+    #
+    #       https://lab.nexedi.com/lab.nexedi.com/lab.nexedi.com/issues/4
+    #
+    #       -> TODO  also remove empty directories.
     backup_refs_delete = ''
     for _ in backup_refs_list.splitlines():
         sha1, type_, ref = _.split()
