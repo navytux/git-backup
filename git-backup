@@ -623,7 +623,7 @@ def cmd_restore(argv):
 def ref_to_repo(ref):
     dotgit = ref.find('.git/')
     if dotgit == -1:
-        raise RuntimeError('E: %s is not a ref for a git repo')
+        raise RuntimeError('E: %s is not a ref for a git repo' % ref)
     repo = ref[:dotgit+4]
     repo = unquote(repo)    # unquote repo name we originally quoted when making backup
     return repo
