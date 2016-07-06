@@ -50,12 +50,12 @@ Backup workflow is:
      $ git pull ...
 
 
-Please see `git-backup`__ source with technical overview on how it works.
+Please see `git-backup.go`__ source with technical overview on how it works.
 
 We also provide convenience program to pull/restore backup data for a GitLab
 instance into/from git-backup managed repository. See `contrib/gitlab-backup`__
 for details.
 
 
-__ git-backup
+__ git-backup.go
 __ contrib/gitlab-backup

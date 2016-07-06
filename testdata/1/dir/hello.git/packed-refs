@@ -1,0 +1,10 @@
+# pack-refs with: peeled fully-peeled 
+647e137fd3b31939b36889eba854a298ef97b6ff refs/heads/branch2
+feeed96ca75fcf8dcf183008f61dbf72e91ab4de refs/heads/master
+f735011c9fcece41219729a33f7876cd8791f659 refs/tags/tag-to-commit
+^354caa307c647cadd3a9c3bffaaa1a72c1ea1dac
+7124713e403925bc772cd252b0dec099f3ced9c5 refs/tags/tag-to-tag
+^354caa307c647cadd3a9c3bffaaa1a72c1ea1dac
+ba899e5639273a6fa4d50d684af8db1ae070351e refs/tags/tag-to-tree
+^e14b1cb9ad4e5120be959593996b777573f7432c
+7a3343f584218e973165d943d7c0af47a52ca477 refs/test/ref-to-blob
