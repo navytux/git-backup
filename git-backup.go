@@ -214,9 +214,6 @@ func xcommit_tree(tree Sha1, parents []Sha1, msg string) Sha1 {
 // through created commit.
 var tag_tree_blob = StrSet{"tag": {}, "tree": {}, "blob": {}}
 func obj_represent_as_commit(sha1 Sha1, obj_type string) Sha1 {
-    if obj_type == "" {
-        obj_type = xgit("cat-file", "-t", sha1)
-    }
     if !tag_tree_blob.Contains(obj_type) {
         raisef("%s (%s): cannot encode as commit", sha1, obj_type)
     }
