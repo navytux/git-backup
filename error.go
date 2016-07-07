@@ -72,7 +72,7 @@ func raisef(format string, a ...interface{}) {
 func raiseif(err error) {
     //if err != nil && !reflect.ValueOf(err).IsNil() {
     if err != nil {
-        raise(err)
+        panic(aserror(err))
     }
 }
 

@@ -13,6 +13,7 @@
 package main
 
 import (
+    "errors"
     "strings"
     "testing"
 )
@@ -107,15 +108,34 @@ func do_raise11() {
     do_raise1()
 }
 
+func do_raise3if() {
+    raiseif(errors.New("3"))
+}
+
+func do_raise3if1() {
+    do_raise3if()
+}
+
+
 func TestErrAddCallingContext(t *testing.T) {
-    myfunc := myfuncname()
-    defer errcatch(func(e *Error) {
-        e = erraddcallingcontext(myfunc, e)
-        msg, want := e.Error(), "do_raise11: do_raise1: 1"
-        if msg != want {
-            t.Fatalf("err + calling context: %q  ; want %q", msg, want)
-        }
-    })
-    do_raise11()
-    t.Fatal("error not caught")
+    var tests = []struct{ f func(); wanterrcontext string } {
+        {do_raise11,    "do_raise11: do_raise1: 1"},
+        {do_raise3if1,  "do_raise3if1: do_raise3if: 3"},
+    }
+
+    for _, tt := range tests {
+        func() {
+            myfunc := myfuncname()
+            defer errcatch(func(e *Error) {
+                e = erraddcallingcontext(myfunc, e)
+                msg := e.Error()
+                if msg != tt.wanterrcontext {
+                    t.Fatalf("err + calling context: %q  ; want %q", msg, tt.wanterrcontext)
+                }
+            })
+            tt.f()
+            t.Fatal("error not caught")
+        }()
+    }
+
 }
