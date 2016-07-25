@@ -156,13 +156,18 @@ func mypkgname() string {
     if myfunc == "" {
         return ""
     }
-    // NOTE dots in package name are escaped by go as %2e
-    // this way the first dot is delimiter between package and function
-    idot := strings.IndexByte(myfunc, '.')
+    // NOTE dots in package name are after last slash are escaped by go as %2e
+    // this way the first '.' after last '/' is delimiter between package and function
+    //
+    // lab.nexedi.com/kirr/git-backup/package%2ename.Function
+    // lab.nexedi.com/kirr/git-backup/pkg2.qqq/name%2ezzz.Function
+    islash := strings.LastIndexByte(myfunc, '/')
+    iafterslash := islash + 1   // NOTE if '/' not found iafterslash = 0
+    idot := strings.IndexByte(myfunc[iafterslash:], '.')
     if idot == -1 {
         panic(fmt.Errorf("funcname %q is not fully qualified", myfunc))
     }
-    return myfunc[:idot]
+    return myfunc[:iafterslash+idot]
 }
 
 // TODO(go1.7) goes away in favour of runtime.Frame
