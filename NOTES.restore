@@ -87,4 +87,5 @@ continues. The algorithm is greedy - it can find minimum, but instead of global
 a local one. We have a way to control how far absolute minimum is away
 (comparing to N(M))
 
-TODO Comparing N(μi∩μj) is O(n^2) -> heuristics to limit to O(n)
+Comparing all N(μi∩μj) is O(n^2) -> heuristics to limit to O(n) (e.g. by
+looking in a window of repositories sorted by name)
