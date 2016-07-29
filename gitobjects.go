@@ -84,16 +84,21 @@ type Tag struct {
 }
 
 // load/parse Tag
-func xload_tag(tag_sha1 Sha1) (tag *Tag, tag_raw string) {
-    gerr, tag_raw, _ := ggit("cat-file", "tag", tag_sha1, RunWith{raw: true})
-    if gerr != nil {
-        raise(&TagLoadError{tag_sha1, gerr})
-    }
-    tag, err := tag_parse(tag_raw)
+//
+// Reasons why not use g.LookupTag():
+//  - we need to get not only parsed tag object, but also its raw content
+//    (libgit2 drops raw data after parsing object)
+//  - we need to have tag_parse() -- a way to parse object from a buffer
+//    (libgit2 does not provide such functionality at all)
+func xload_tag(g *git.Repository, tag_sha1 Sha1) (tag *Tag, tag_obj *git.OdbObject) {
+    tag_obj, err := ReadObject(g, tag_sha1, git.ObjectTag)
+    raiseif(err)
+
+    tag, err = tag_parse(String(tag_obj.Data()))
     if err != nil {
         raise(&TagLoadError{tag_sha1, err})
     }
-    return tag, tag_raw
+    return tag, tag_obj
 }
 
 type TagLoadError struct {

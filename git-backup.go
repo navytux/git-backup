@@ -218,7 +218,7 @@ func xcommit_tree(tree Sha1, parents []Sha1, msg string) Sha1 {
 // object and tagged object is kept there in repo thanks to it being reachable
 // through created commit.
 var tag_tree_blob = StrSet{"tag": {}, "tree": {}, "blob": {}}
-func obj_represent_as_commit(sha1 Sha1, obj_type string) Sha1 {
+func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1 {
     if !tag_tree_blob.Contains(obj_type) {
         raisef("%s (%s): cannot encode as commit", sha1, obj_type)
     }
@@ -231,10 +231,10 @@ func obj_represent_as_commit(sha1 Sha1, obj_type string) Sha1 {
     // below the code layout is mainly for tag type, and we hook tree and blob
     // types handling into that layout
     if obj_type == "tag" {
-        tag, tag_raw := xload_tag(sha1)
+        tag, tag_obj := xload_tag(g, sha1)
         tagged_type = tag.tagged_type
         tagged_sha1 = tag.tagged_sha1
-        obj_encoded += tag_raw
+        obj_encoded += String(tag_obj.Data())
     } else {
         // for tree/blob we only care that object stays reachable
         tagged_type = obj_type
@@ -278,7 +278,7 @@ func obj_represent_as_commit(sha1 Sha1, obj_type string) Sha1 {
     //  v                 .tree   -> ø
     // Tag₁               .parent -> Commit₁*
     if tagged_type == "tag" {
-        commit1 := obj_represent_as_commit(tagged_sha1, tagged_type)
+        commit1 := obj_represent_as_commit(g, tagged_sha1, tagged_type)
         return zcommit_tree(mktree_empty(), []Sha1{commit1}, obj_encoded)
     }
 
@@ -332,7 +332,7 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) {
     }
 
     // verify consistency via re-encoding tag again
-    commit_sha1_ := obj_represent_as_commit(tag_sha1, "tag")
+    commit_sha1_ := obj_represent_as_commit(g, tag_sha1, "tag")
     if commit_sha1_ != commit_sha1 {
         xraisef("encoded tag corrupt (reencoded as %s)", commit_sha1_)
     }
@@ -518,7 +518,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
             var seen bool
             sha1_, seen = noncommit_seen[sha1]
             if !seen {
-                sha1_ = obj_represent_as_commit(sha1, type_)
+                sha1_ = obj_represent_as_commit(gb, sha1, type_)
                 noncommit_seen[sha1] = sha1_
             }
 
