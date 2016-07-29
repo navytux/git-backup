@@ -315,7 +315,8 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) {
     }
 
     // re-create tag object
-    tag_sha1 := xgitSha1("hash-object", "-t", "tag", "-w", "--stdin", RunWith{stdin: obj_raw})
+    tag_sha1, err := WriteObject(g, Bytes(obj_raw), git.ObjectTag)
+    raiseif(err)
 
     // the original tagged object should be already in repository, because we
     // always attach it to encoding commit one way or another,
