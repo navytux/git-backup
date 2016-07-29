@@ -285,16 +285,19 @@ func obj_represent_as_commit(sha1 Sha1, obj_type string) Sha1 {
 
 // recreate tag/tree/blob from specially crafted commit
 // (see obj_represent_as_commit() about how a objects are originally translated into commit)
-func obj_recreate_from_commit(commit_sha1 Sha1) {
+func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) {
     xraise  := func(info interface{})           { raise(&RecreateObjError{commit_sha1, info}) }
     xraisef := func(f string, a ...interface{}) { xraise(fmt.Sprintf(f, a...)) }
 
-    commit, _ := xload_commit(commit_sha1)
-    if len(commit.parentv) > 1 {
+    commit, err := g.LookupCommit(commit_sha1.AsOid())
+    if err != nil {
+        xraise(err)
+    }
+    if commit.ParentCount() > 1 {
         xraise(">1 parents")
     }
 
-    obj_type, obj_raw, err := headtail(commit.msg, "\n")
+    obj_type, obj_raw, err := headtail(commit.Message(), "\n")
     if err != nil {
         xraise("invalid encoded format")
     }
@@ -319,10 +322,10 @@ func obj_recreate_from_commit(commit_sha1 Sha1) {
         xraisef("encoded tag: %s", err)
     }
     if tag.tagged_type == "tag" {
-        if len(commit.parentv) == 0 {
+        if commit.ParentCount() == 0 {
             xraise("encoded tag corrupt (tagged is tag but []parent is empty)")
         }
-        obj_recreate_from_commit(commit.parentv[0])
+        obj_recreate_from_commit(g, Sha1FromOid(commit.ParentId(0)))
     }
 
     // verify consistency via re-encoding tag again
@@ -824,7 +827,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
             //   are not reachable from backup repo HEAD )
             for _, __ := range repo.refs {
                 if __.sha1 != __.sha1_ {
-                    obj_recreate_from_commit(__.sha1_)
+                    obj_recreate_from_commit(gb, __.sha1_)
                 }
             }
 

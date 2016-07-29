@@ -16,80 +16,12 @@ package main
 import (
     "errors"
     "fmt"
-    "strings"
 )
-
-type Commit struct {
-    tree    Sha1
-    parentv []Sha1
-    msg     string
-}
 
 type Tag struct {
     tagged_type string
     tagged_sha1 Sha1
     // TODO msg
-}
-
-// TODO Tree (if/when needed)
-// TODO Blob (if/when needed)
-
-// load/parse Commit
-
-// extract .tree .parent[] and .msg
-//
-// unfortunately `git show --format=%B` adds newline and optionally wants to
-// reencode commit message and otherwise heavily rely on rev-list traversal
-// machinery -> so we decode commit by hand in a plumbing way.
-func xload_commit(commit_sha1 Sha1) (commit *Commit, commit_raw string) {
-    gerr, commit_raw, _ := ggit("cat-file", "commit", commit_sha1, RunWith{raw: true})
-    if gerr != nil {
-        raise(&CommitLoadError{commit_sha1, gerr})
-    }
-    commit, err := commit_parse(commit_raw)
-    if err != nil {
-        raise(&CommitLoadError{commit_sha1, err})
-    }
-    return commit, commit_raw
-}
-
-type CommitLoadError struct {
-    commit_sha1 Sha1
-    err         error
-}
-
-func (e *CommitLoadError) Error() string {
-    return fmt.Sprintf("commit %s: %s", e.commit_sha1, e.err)
-}
-
-func commit_parse(commit_raw string) (*Commit, error) {
-    c := Commit{}
-    head, msg, err := headtail(commit_raw, "\n\n")
-    c.msg = msg
-    if err != nil {
-        return nil, errors.New("cannot split to head & msg")
-    }
-
-    headv := strings.Split(head, "\n")
-    if len(headv) == 0 {
-        return nil, errors.New("empty header")
-    }
-    _, err = fmt.Sscanf(headv[0], "tree %s\n", &c.tree)
-    if err != nil {
-        return nil, errors.New("bad tree entry")
-    }
-    for _, h := range headv[1:] {
-        if !strings.HasPrefix(h, "parent ") {
-            break
-        }
-        p := Sha1{}
-        _, err = fmt.Sscanf(h, "parent %s\n", &p)
-        if err != nil {
-            return nil, errors.New("bad parent entry")
-        }
-        c.parentv = append(c.parentv, p)
-    }
-    return &c, nil
 }
 
 // load/parse Tag
