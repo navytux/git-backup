@@ -17,6 +17,8 @@ import (
     "bytes"
     "encoding/hex"
     "fmt"
+
+    git "github.com/libgit2/git2go"
 )
 
 const SHA1_RAWSIZE = 20
@@ -81,3 +83,12 @@ type BySha1 []Sha1
 func (p BySha1) Len() int           { return len(p) }
 func (p BySha1) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 func (p BySha1) Less(i, j int) bool { return bytes.Compare(p[i].sha1[:], p[j].sha1[:]) < 0 }
+
+// interoperability with git2go
+func (sha1 *Sha1) AsOid() *git.Oid {
+    return (*git.Oid)(&sha1.sha1)
+}
+
+func Sha1FromOid(oid *git.Oid) Sha1 {
+    return Sha1{*oid}
+}

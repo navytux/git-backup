@@ -71,6 +71,8 @@ import (
     "strings"
     "syscall"
     "time"
+
+    git "github.com/libgit2/git2go"
 )
 
 // verbose output
@@ -354,7 +356,7 @@ type PullSpec struct {
     dir, prefix string
 }
 
-func cmd_pull(argv []string) {
+func cmd_pull(gb *git.Repository, argv []string) {
     flags := flag.FlagSet{Usage: cmd_pull_usage}
     flags.Init("", flag.ExitOnError)
     flags.Parse(argv)
@@ -377,7 +379,7 @@ func cmd_pull(argv []string) {
         pullspecv = append(pullspecv, PullSpec{dir, prefix})
     }
 
-    cmd_pull_(pullspecv)
+    cmd_pull_(gb, pullspecv)
 }
 
 // info about ref pointing to sha1
@@ -386,7 +388,7 @@ type Ref struct {
     sha1 Sha1
 }
 
-func cmd_pull_(pullspecv []PullSpec) {
+func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     // while pulling, we'll keep refs from all pulled repositories under temp
     // unique work refs namespace.
     backup_time := time.Now().Format("20060102-1504")               // %Y%m%d-%H%M
@@ -601,7 +603,7 @@ type RestoreSpec struct {
     prefix, dir string
 }
 
-func cmd_restore(argv []string) {
+func cmd_restore(gb *git.Repository, argv []string) {
     flags := flag.FlagSet{Usage: cmd_restore_usage}
     flags.Init("", flag.ExitOnError)
     flags.Parse(argv)
@@ -626,7 +628,7 @@ func cmd_restore(argv []string) {
         restorespecv = append(restorespecv, RestoreSpec{prefix, dir})
     }
 
-    cmd_restore_(HEAD, restorespecv)
+    cmd_restore_(gb, HEAD, restorespecv)
 }
 
 // kirr/wendelin.core.git/heads/master -> kirr/wendelin.core.git, heads/master
@@ -714,7 +716,7 @@ func (br ByRepoPath) Search(prefix string) int {
            })
 }
 
-func cmd_restore_(HEAD_ string, restorespecv []RestoreSpec) {
+func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) {
     HEAD := xgitSha1("rev-parse", "--verify", HEAD_)
 
     // read backup refs index
@@ -878,7 +880,7 @@ func cmd_restore_(HEAD_ string, restorespecv []RestoreSpec) {
     }
 }
 
-var commands = map[string]func([]string){
+var commands = map[string]func(*git.Repository, []string){
     "pull":    cmd_pull,
     "restore": cmd_restore,
 }
@@ -933,5 +935,9 @@ func main() {
         os.Exit(1)
     })
 
-    cmd(argv[1:])
+    // backup repository
+    gb, err := git.OpenRepository(".")
+    raiseif(err)
+
+    cmd(gb, argv[1:])
 }

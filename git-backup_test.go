@@ -21,6 +21,8 @@ import (
     "strings"
     "syscall"
     "testing"
+
+    git "github.com/libgit2/git2go"
 )
 
 func xgetcwd(t *testing.T) string {
@@ -82,10 +84,14 @@ func TestPullRestore(t *testing.T) {
     // init backup repository
     xgit("init", "--bare", "backup.git")
     xchdir(t, "backup.git")
+    gb, err := git.OpenRepository(".")
+    if err != nil {
+        t.Fatal(err)
+    }
 
     // pull from testdata
     my1 := mydir + "/testdata/1"
-    cmd_pull([]string{my1+":b1"})
+    cmd_pull(gb, []string{my1+":b1"})
 
     // prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
     xgit("prune")
@@ -107,9 +113,16 @@ func TestPullRestore(t *testing.T) {
         }
     }
 
+    // reopen backup repository - to avoid having stale cache with present
+    // objects we deleted above with `git prune`
+    gb, err = git.OpenRepository(".")
+    if err != nil {
+        t.Fatal(err)
+    }
+
     // restore backup
     work1 := workdir + "/1"
-    cmd_restore([]string{"HEAD", "b1:"+work1})
+    cmd_restore(gb, []string{"HEAD", "b1:"+work1})
 
     // verify files restored to the same as original
     gerr, diff, _ := ggit("diff", "--no-index", "--raw", "--exit-code", my1, work1)
@@ -181,7 +194,7 @@ func TestPullRestore(t *testing.T) {
         defer errcatch(func(e *Error) {
             // it ok - pull should raise
         })
-        cmd_pull([]string{my2+":b2"})
+        cmd_pull(gb, []string{my2+":b2"})
         t.Fatal("fetching from corrupt.git did not complain")
     }()
 }
