@@ -42,7 +42,7 @@ type Tag struct {
 // reencode commit message and otherwise heavily rely on rev-list traversal
 // machinery -> so we decode commit by hand in a plumbing way.
 func xload_commit(commit_sha1 Sha1) (commit *Commit, commit_raw string) {
-    gerr, commit_raw, _ := git("cat-file", "commit", commit_sha1, RunWith{raw: true})
+    gerr, commit_raw, _ := ggit("cat-file", "commit", commit_sha1, RunWith{raw: true})
     if gerr != nil {
         raise(&CommitLoadError{commit_sha1, gerr})
     }
@@ -94,7 +94,7 @@ func commit_parse(commit_raw string) (*Commit, error) {
 
 // load/parse Tag
 func xload_tag(tag_sha1 Sha1) (tag *Tag, tag_raw string) {
-    gerr, tag_raw, _ := git("cat-file", "tag", tag_sha1, RunWith{raw: true})
+    gerr, tag_raw, _ := ggit("cat-file", "tag", tag_sha1, RunWith{raw: true})
     if gerr != nil {
         raise(&TagLoadError{tag_sha1, gerr})
     }

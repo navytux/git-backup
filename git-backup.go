@@ -397,7 +397,7 @@ func cmd_pull_(pullspecv []PullSpec) {
     xgit("update-ref", backup_lock, mktree_empty(), Sha1{})
 
     // make sure there is root commit
-    gerr, _, _ := git("rev-parse", "--verify", "HEAD")
+    gerr, _, _ := ggit("rev-parse", "--verify", "HEAD")
     if gerr != nil {
         infof("# creating root commit")
         // NOTE `git commit` does not work in bare repo - do commit by hand
@@ -859,7 +859,7 @@ func cmd_restore_(HEAD_ string, restorespecv []RestoreSpec) {
             //
             // Compared to fsck we do not re-compute sha1 sum of objects which
             // is significantly faster.
-            gerr, _, _ := git("--git-dir=" + repopath,
+            gerr, _, _ := ggit("--git-dir=" + repopath,
                     "rev-list", "--objects", "--stdin", "--quiet", RunWith{stdin: repo.refs.Sha1HeadsStr()})
             if gerr != nil {
                 fmt.Fprintln(os.Stderr, "E: Problem while checking connectivity of extracted repo:")

@@ -101,7 +101,7 @@ func TestPullRestore(t *testing.T) {
                      "7124713e403925bc772cd252b0dec099f3ced9c5",
                      "f735011c9fcece41219729a33f7876cd8791f659"}
     for _, tag := range tags {
-        gerr, _, _ := git("cat-file", "-p", tag)
+        gerr, _, _ := ggit("cat-file", "-p", tag)
         if gerr == nil {
             t.Fatalf("tag %s still present in backup.git after git-prune", tag)
         }
@@ -112,7 +112,7 @@ func TestPullRestore(t *testing.T) {
     cmd_restore([]string{"HEAD", "b1:"+work1})
 
     // verify files restored to the same as original
-    gerr, diff, _ := git("diff", "--no-index", "--raw", "--exit-code", my1, work1)
+    gerr, diff, _ := ggit("diff", "--no-index", "--raw", "--exit-code", my1, work1)
     // 0 - no diff, 1 - has diff, 2 - problem
     if gerr != nil && gerr.Sys().(syscall.WaitStatus).ExitStatus() > 1 {
         t.Fatal(gerr)

@@ -128,7 +128,7 @@ func (e *GitErrContext) Error() string {
     return msg
 }
 
-// argv -> []string, ctx    (for passing argv + RunWith handy - see git() for details)
+// argv -> []string, ctx    (for passing argv + RunWith handy - see ggit() for details)
 func _gitargv(argv ...interface{}) (argvs []string, ctx RunWith) {
     ctx_seen := false
 
@@ -156,11 +156,11 @@ func _gitargv(argv ...interface{}) (argvs []string, ctx RunWith) {
 // - on other errors - exception is raised
 //
 // NOTE err is concrete *GitError, not error
-func git(argv ...interface{}) (err *GitError, stdout, stderr string) {
-    return git2(_gitargv(argv...))
+func ggit(argv ...interface{}) (err *GitError, stdout, stderr string) {
+    return ggit2(_gitargv(argv...))
 }
 
-func git2(argv []string, ctx RunWith) (err *GitError, stdout, stderr string) {
+func ggit2(argv []string, ctx RunWith) (err *GitError, stdout, stderr string) {
     e, stdout, stderr := _git(argv, ctx)
     eexec, _ := e.(*exec.ExitError)
     if e != nil && eexec == nil {
@@ -179,7 +179,7 @@ func xgit(argv ...interface{}) string {
 }
 
 func xgit2(argv []string, ctx RunWith) string {
-    gerr, stdout, _ := git2(argv, ctx)
+    gerr, stdout, _ := ggit2(argv, ctx)
     if gerr != nil {
         raise(gerr)
     }
@@ -203,7 +203,7 @@ func (e *GitSha1Error) Error() string {
 }
 
 func xgit2Sha1(argv []string, ctx RunWith) Sha1 {
-    gerr, stdout, stderr := git2(argv, ctx)
+    gerr, stdout, stderr := ggit2(argv, ctx)
     if gerr != nil {
         raise(gerr)
     }
