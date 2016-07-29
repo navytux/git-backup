@@ -63,6 +63,7 @@ package main
 import (
     "flag"
     "fmt"
+    "io/ioutil"
     "os"
     pathpkg "path"
     "path/filepath"
@@ -108,9 +109,8 @@ func debugf(format string, a ...interface{}) {
 // -------- git operations (like create/extract blob, commit tree ...) --------
 
 // file -> blob_sha1, mode
-func file_to_blob(path string) (Sha1, uint32) {
-    argv := []string{"hash-object", "-w", "--no-filters"}
-    stdin := ""
+func file_to_blob(g *git.Repository, path string) (Sha1, uint32) {
+    var blob_content []byte
 
     // because we want to pass mode to outside world (to e.g. `git update-index`)
     // we need to get native OS mode, not translated one as os.Lstat() would give us.
@@ -121,32 +121,35 @@ func file_to_blob(path string) (Sha1, uint32) {
     }
 
     if st.Mode&syscall.S_IFMT == syscall.S_IFLNK {
-        // git hash-object does not handle symlinks
-        argv = append(argv, "--stdin")
-        stdin, err = os.Readlink(path)
+        __, err := os.Readlink(path)
+        blob_content = Bytes(__)
         raiseif(err)
     } else {
-        argv = append(argv, "--", path)
-        // stdin = "" already
+        blob_content, err = ioutil.ReadFile(path)
+        raiseif(err)
     }
 
-    blob_sha1 := xgit2Sha1(argv, RunWith{stdin: stdin})
+    blob_sha1, err := WriteObject(g, blob_content, git.ObjectBlob)
+    raiseif(err)
+
     return blob_sha1, st.Mode
 }
 
 // blob_sha1, mode -> file
-func blob_to_file(blob_sha1 Sha1, mode uint32, path string) {
-    blob_content := xgit("cat-file", "blob", blob_sha1, RunWith{raw: true})
+func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
+    blob, err := ReadObject(g, blob_sha1, git.ObjectBlob)
+    raiseif(err)
+    blob_content := blob.Data()
 
-    err := os.MkdirAll(pathpkg.Dir(path), 0777)
+    err = os.MkdirAll(pathpkg.Dir(path), 0777)
     raiseif(err)
 
     if mode&syscall.S_IFMT == syscall.S_IFLNK {
-        err = os.Symlink(blob_content, path)
+        err = os.Symlink(String(blob_content), path)
         raiseif(err)
     } else {
         // NOTE mode is native - we cannot use ioutil.WriteFile() directly
-        err = writefile(path, Bytes(blob_content), mode)
+        err = writefile(path, blob_content, mode)
         raiseif(err)
     }
 }
@@ -434,7 +437,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
             // files -> add directly to index to commit later
             if !info.IsDir() {
                 infof("# file %s\t<- %s", prefix, path)
-                blob, mode := file_to_blob(path)
+                blob, mode := file_to_blob(gb, path)
                 xgit("update-index", "--add", "--cacheinfo",
                         fmt.Sprintf("%o,%s,%s", mode, blob, reprefix(dir, prefix, path)))
                 return nil
@@ -792,7 +795,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 
             filename = reprefix(prefix, dir, filename)
             infof("# file %s\t-> %s", prefix, filename)
-            blob_to_file(sha1, mode, filename)
+            blob_to_file(gb, sha1, mode, filename)
 
             // make sure git will recognize *.git as repo:
             //   - it should have refs/{heads,tags}/ and objects/pack/ inside.

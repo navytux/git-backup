@@ -16,7 +16,66 @@ package main
 import (
     "errors"
     "fmt"
+
+    git "github.com/libgit2/git2go"
 )
+
+// read/write raw objects
+func ReadObject(g *git.Repository, sha1 Sha1, objtype git.ObjectType) (*git.OdbObject, error) {
+    obj, err := ReadObject2(g, sha1)
+    if err != nil {
+        return nil, err
+    }
+    if objtype != obj.Type() {
+        return nil, &UnexpectedObjType{obj, objtype}
+    }
+    return obj, nil
+}
+
+func ReadObject2(g *git.Repository, sha1 Sha1) (*git.OdbObject, error) {
+    odb, err := g.Odb()
+    if err != nil {
+        return nil, &OdbNotReady{g, err}
+    }
+    obj, err := odb.Read(sha1.AsOid())
+    if err != nil {
+        return nil, err
+    }
+    return obj, nil
+}
+
+func WriteObject(g *git.Repository, content []byte, objtype git.ObjectType) (Sha1, error) {
+    odb, err := g.Odb()
+    if err != nil {
+        return Sha1{}, &OdbNotReady{g, err}
+    }
+    oid, err := odb.Write(content, objtype)
+    if err != nil {
+        // err is e.g. "Failed to create temporary file '.../objects/tmp_object_git2_G045iN': Permission denied"
+        return Sha1{}, err
+    }
+    return Sha1FromOid(oid), nil
+}
+
+type OdbNotReady struct {
+    g   *git.Repository
+    err error
+}
+
+func (e *OdbNotReady) Error() string {
+    return fmt.Sprintf("git(%q): odb not ready: %s", e.g.Path(), e.err)
+}
+
+type UnexpectedObjType struct {
+    obj      *git.OdbObject
+    wantType git.ObjectType
+}
+
+func (e *UnexpectedObjType) Error() string {
+    return fmt.Sprintf("%s: type is %s  (expected %s)", e.obj.Id(), e.obj.Type(), e.wantType)
+}
+
+
 
 type Tag struct {
     tagged_type string
