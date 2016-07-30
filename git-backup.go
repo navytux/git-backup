@@ -414,7 +414,8 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
         xgit("update-ref", "-m", "git-backup pull init", "HEAD", commit)
     }
 
-    // walk over specified dirs, pulling objects from git and adding non-git-object files
+    // walk over specified dirs, pulling objects from git and blobbing non-git-object files
+    blobbedv := []string{} // info about file pulled to blob, and not yet added to index
     for _, __ := range pullspecv {
         dir, prefix := __.dir, __.prefix
 
@@ -435,12 +436,12 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
                 errout = erraddcallingcontext(here, e)
             })
 
-            // files -> add directly to index to commit later
+            // files -> blobs + queue info for adding blobs to index
             if !info.IsDir() {
                 infof("# file %s\t<- %s", prefix, path)
                 blob, mode := file_to_blob(gb, path)
-                xgit("update-index", "--add", "--cacheinfo",
-                        fmt.Sprintf("%o,%s,%s", mode, blob, reprefix(dir, prefix, path)))
+                blobbedv = append(blobbedv,
+                    fmt.Sprintf("%o %s\t%s", mode, blob, reprefix(dir, prefix, path)))
                 return nil
             }
 
@@ -480,6 +481,9 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
             raise(e)
         }
     }
+
+    // add to index files we converted to blobs
+    xgit("update-index", "--add", "--index-info", RunWith{stdin: strings.Join(blobbedv, "\n")})
 
     // all refs from all found git repositories populated.
     // now prepare manifest with ref -> sha1 and do a synthetic commit merging all that sha1
