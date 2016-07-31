@@ -106,7 +106,7 @@ func debugf(format string, a ...interface{}) {
     }
 }
 
-// -------- git operations (like create/extract blob, commit tree ...) --------
+// -------- create/extract blob --------
 
 // file -> blob_sha1, mode
 func file_to_blob(g *git.Repository, path string) (Sha1, uint32) {
@@ -152,57 +152,6 @@ func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
         err = writefile(path, blob_content, mode)
         raiseif(err)
     }
-}
-
-
-// create empty git tree -> tree sha1
-var tree_empty Sha1
-func mktree_empty() Sha1 {
-    if tree_empty.IsNull() {
-        tree_empty = xgitSha1("mktree", RunWith{stdin: ""})
-    }
-    return tree_empty
-}
-
-// `git commit-tree` -> commit_sha1,   raise on error
-type AuthorInfo struct {
-    name  string
-    email string
-    date  string
-}
-
-func xcommit_tree2(tree Sha1, parents []Sha1, msg string, author AuthorInfo, committer AuthorInfo) Sha1 {
-    argv := []string{"commit-tree", tree.String()}
-    for _, p := range parents {
-        argv = append(argv, "-p", p.String())
-    }
-
-    // env []string -> {}
-    env := map[string]string{}
-    for _, e := range os.Environ() {
-        i := strings.Index(e, "=")
-        if i == -1 {
-            panic(fmt.Errorf("E: env variable format invalid: %q", e))
-        }
-        k, v := e[:i], e[i+1:]
-        if _, dup := env[k]; dup {
-            panic(fmt.Errorf("E: env has duplicate entry for %q", k))
-        }
-        env[k] = v
-    }
-
-    if author.name  != ""       { env["GIT_AUTHOR_NAME"]     = author.name     }
-    if author.email != ""       { env["GIT_AUTHOR_EMAIL"]    = author.email    }
-    if author.date  != ""       { env["GIT_AUTHOR_DATE"]     = author.date     }
-    if committer.name  != ""    { env["GIT_COMMITTER_NAME"]  = committer.name  }
-    if committer.email != ""    { env["GIT_COMMITTER_EMAIL"] = committer.email }
-    if committer.date  != ""    { env["GIT_COMMITTER_DATE"]  = committer.date  }
-
-    return xgit2Sha1(argv, RunWith{stdin: msg, env: env})
-}
-
-func xcommit_tree(tree Sha1, parents []Sha1, msg string) Sha1 {
-    return xcommit_tree2(tree, parents, msg, AuthorInfo{}, AuthorInfo{})
 }
 
 // -------- tags representation --------

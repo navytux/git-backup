@@ -16,6 +16,8 @@ package main
 import (
     "errors"
     "fmt"
+    "os"
+    "strings"
 
     git "github.com/libgit2/git2go"
 )
@@ -139,4 +141,59 @@ type InvalidLstreeEntry struct {
 
 func (e *InvalidLstreeEntry) Error() string {
     return fmt.Sprintf("invalid ls-tree entry %q", e.lsentry)
+}
+
+// create empty git tree -> tree sha1
+var tree_empty Sha1
+func mktree_empty() Sha1 {
+    if tree_empty.IsNull() {
+        tree_empty = xgitSha1("mktree", RunWith{stdin: ""})
+    }
+    return tree_empty
+}
+
+// commit tree
+//
+// Reason why not use g.CreateCommit():
+//  - we don't want to load tree and parent objects - we only have their sha1
+
+// `git commit-tree` -> commit_sha1,   raise on error
+type AuthorInfo struct {
+    name  string
+    email string
+    date  string
+}
+
+func xcommit_tree2(tree Sha1, parents []Sha1, msg string, author AuthorInfo, committer AuthorInfo) Sha1 {
+    argv := []string{"commit-tree", tree.String()}
+    for _, p := range parents {
+        argv = append(argv, "-p", p.String())
+    }
+
+    // env []string -> {}
+    env := map[string]string{}
+    for _, e := range os.Environ() {
+        i := strings.Index(e, "=")
+        if i == -1 {
+            panic(fmt.Errorf("E: env variable format invalid: %q", e))
+        }
+        k, v := e[:i], e[i+1:]
+        if _, dup := env[k]; dup {
+            panic(fmt.Errorf("E: env has duplicate entry for %q", k))
+        }
+        env[k] = v
+    }
+
+    if author.name  != ""       { env["GIT_AUTHOR_NAME"]     = author.name     }
+    if author.email != ""       { env["GIT_AUTHOR_EMAIL"]    = author.email    }
+    if author.date  != ""       { env["GIT_AUTHOR_DATE"]     = author.date     }
+    if committer.name  != ""    { env["GIT_COMMITTER_NAME"]  = committer.name  }
+    if committer.email != ""    { env["GIT_COMMITTER_EMAIL"] = committer.email }
+    if committer.date  != ""    { env["GIT_COMMITTER_DATE"]  = committer.date  }
+
+    return xgit2Sha1(argv, RunWith{stdin: msg, env: env})
+}
+
+func xcommit_tree(tree Sha1, parents []Sha1, msg string) Sha1 {
+    return xcommit_tree2(tree, parents, msg, AuthorInfo{}, AuthorInfo{})
 }
