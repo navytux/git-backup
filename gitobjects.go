@@ -17,7 +17,9 @@ import (
     "errors"
     "fmt"
     "os"
-    "strings"
+    "os/user"
+    "sync"
+    "time"
 
     git "github.com/libgit2/git2go"
 )
@@ -157,43 +159,77 @@ func mktree_empty() Sha1 {
 // Reason why not use g.CreateCommit():
 //  - we don't want to load tree and parent objects - we only have their sha1
 
+type AuthorInfo git.Signature
+
+func (ai *AuthorInfo) String() string {
+    _, toffset := ai.When.Zone()
+    // offset: Git wants in minutes, .Zone() gives in seconds
+    return fmt.Sprintf("%s <%s> %d %+05d", ai.Name, ai.Email, ai.When.Unix(), toffset / 60)
+}
+
+var (
+    defaultIdent     AuthorInfo // default ident without date
+    defaultIdentOnce sync.Once
+)
+
+func getDefaultIdent(g *git.Repository) AuthorInfo {
+    sig, err := g.DefaultSignature()
+    if err == nil {
+        return AuthorInfo(*sig)
+    }
+
+    // libgit2 failed for some reason (i.e. user.name config not set). Let's cook ident ourselves
+    defaultIdentOnce.Do(func() {
+        var username, name string
+        u, _ := user.Current()
+        if u != nil {
+            username = u.Username
+            name = u.Name
+        } else {
+            username = "?"
+            name = "?"
+        }
+
+        // XXX it is better to get hostname as fqdn
+        hostname, _ := os.Hostname()
+        if hostname == "" {
+            hostname = "?"
+        }
+
+        defaultIdent.Name = name
+        defaultIdent.Email = fmt.Sprintf("%s@%s", username, hostname)
+    })
+
+    ident := defaultIdent
+    ident.When = time.Now()
+    return ident
+}
+
 // `git commit-tree` -> commit_sha1,   raise on error
-type AuthorInfo struct {
-    name  string
-    email string
-    date  string
-}
+func xcommit_tree2(g *git.Repository, tree Sha1, parents []Sha1, msg string, author AuthorInfo, committer AuthorInfo) Sha1 {
+    ident := getDefaultIdent(g)
 
-func xcommit_tree2(tree Sha1, parents []Sha1, msg string, author AuthorInfo, committer AuthorInfo) Sha1 {
-    argv := []string{"commit-tree", tree.String()}
+    if author.Name  == ""       { author.Name       = ident.Name  }
+    if author.Email == ""       { author.Email      = ident.Email }
+    if author.When.IsZero()     { author.When       = ident.When  }
+    if committer.Name  == ""    { committer.Name    = ident.Name  }
+    if committer.Email == ""    { committer.Email   = ident.Email }
+    if committer.When.IsZero()  { committer.When    = ident.When  }
+
+    commit := fmt.Sprintf("tree %s\n", tree)
     for _, p := range parents {
-        argv = append(argv, "-p", p.String())
+        commit += fmt.Sprintf("parent %s\n", p)
     }
+    commit += fmt.Sprintf("author %s\n", &author)
+    commit += fmt.Sprintf("committer %s\n", &committer)
+    commit += fmt.Sprintf("\n%s", msg)
 
-    // env []string -> {}
-    env := map[string]string{}
-    for _, e := range os.Environ() {
-        i := strings.Index(e, "=")
-        if i == -1 {
-            panic(fmt.Errorf("E: env variable format invalid: %q", e))
-        }
-        k, v := e[:i], e[i+1:]
-        if _, dup := env[k]; dup {
-            panic(fmt.Errorf("E: env has duplicate entry for %q", k))
-        }
-        env[k] = v
-    }
+    sha1, err := WriteObject(g, Bytes(commit), git.ObjectCommit)
+    raiseif(err)
 
-    if author.name  != ""       { env["GIT_AUTHOR_NAME"]     = author.name     }
-    if author.email != ""       { env["GIT_AUTHOR_EMAIL"]    = author.email    }
-    if author.date  != ""       { env["GIT_AUTHOR_DATE"]     = author.date     }
-    if committer.name  != ""    { env["GIT_COMMITTER_NAME"]  = committer.name  }
-    if committer.email != ""    { env["GIT_COMMITTER_EMAIL"] = committer.email }
-    if committer.date  != ""    { env["GIT_COMMITTER_DATE"]  = committer.date  }
-
-    return xgit2Sha1(argv, RunWith{stdin: msg, env: env})
+    return sha1
 }
 
-func xcommit_tree(tree Sha1, parents []Sha1, msg string) Sha1 {
-    return xcommit_tree2(tree, parents, msg, AuthorInfo{}, AuthorInfo{})
+func xcommit_tree(g *git.Repository, tree Sha1, parents []Sha1, msg string) Sha1 {
+    return xcommit_tree2(g, tree, parents, msg, AuthorInfo{}, AuthorInfo{})
 }

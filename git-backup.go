@@ -192,9 +192,9 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
 
     // all commits we do here - we do with fixed name/date, so transformation
     // tag->commit is stable wrt git environment and time change
-    fixed := AuthorInfo{name: "Git backup", email: "git@backup.org", date: "@0 +0000"}
+    fixed := AuthorInfo{Name: "Git backup", Email: "git@backup.org", When: time.Unix(0, 0).UTC()}
     zcommit_tree := func(tree Sha1, parents []Sha1, msg string) Sha1 {
-        return xcommit_tree2(tree, parents, msg, fixed, fixed)
+        return xcommit_tree2(g, tree, parents, msg, fixed, fixed)
     }
 
     // Tag        ~>     Commit*
@@ -358,7 +358,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     if gerr != nil {
         infof("# creating root commit")
         // NOTE `git commit` does not work in bare repo - do commit by hand
-        commit := xcommit_tree(mktree_empty(), []Sha1{}, "Initialize git-backup repository")
+        commit := xcommit_tree(gb, mktree_empty(), []Sha1{}, "Initialize git-backup repository")
         xgit("update-ref", "-m", "git-backup pull init", "HEAD", commit)
     }
 
@@ -499,7 +499,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     backup_tree_sha1 := xgitSha1("write-tree")
 
     HEAD := xgitSha1("rev-parse", "HEAD")
-    commit_sha1 := xcommit_tree(backup_tree_sha1, append([]Sha1{HEAD}, backup_refs_parentv...),
+    commit_sha1 := xcommit_tree(gb, backup_tree_sha1, append([]Sha1{HEAD}, backup_refs_parentv...),
             "Git-backup " + backup_time)
 
     xgit("update-ref", "-m", "git-backup pull", "HEAD", commit_sha1, HEAD)
