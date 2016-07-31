@@ -288,7 +288,10 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
 
 // recreate tag/tree/blob from specially crafted commit
 // (see obj_represent_as_commit() about how a objects are originally translated into commit)
-func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) {
+// returns:
+//   - tag:       recreated object sha1
+//   - tree/blob: null sha1
+func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) Sha1 {
     xraise  := func(info interface{})           { raise(&RecreateObjError{commit_sha1, info}) }
     xraisef := func(f string, a ...interface{}) { xraise(fmt.Sprintf(f, a...)) }
 
@@ -311,7 +314,7 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) {
     // for tree/blob we do not need to do anything - that objects were reachable
     // from commit and are present in git db.
     if obj_type == "tree" || obj_type == "blob" {
-        return
+        return Sha1{}
     }
 
     // re-create tag object
@@ -332,11 +335,7 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) {
         obj_recreate_from_commit(g, Sha1FromOid(commit.ParentId(0)))
     }
 
-    // verify consistency via re-encoding tag again
-    commit_sha1_ := obj_represent_as_commit(g, tag_sha1, "tag")
-    if commit_sha1_ != commit_sha1 {
-        xraisef("encoded tag corrupt (reencoded as %s)", commit_sha1_)
-    }
+    return tag_sha1
 }
 
 type RecreateObjError struct {

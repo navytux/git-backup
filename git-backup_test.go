@@ -40,6 +40,14 @@ func xchdir(t *testing.T, dir string) {
     }
 }
 
+func XSha1(s string) Sha1 {
+    sha1, err := Sha1Parse(s)
+    if err != nil {
+        panic(err)
+    }
+    return sha1
+}
+
 // verify end-to-end pull-restore
 func TestPullRestore(t *testing.T) {
     // if something raises -> don't let testing panic - report it as proper error with context.
@@ -93,6 +101,43 @@ func TestPullRestore(t *testing.T) {
     my1 := mydir + "/testdata/1"
     cmd_pull(gb, []string{my1+":b1"})
 
+    // verify tag/tree/blob encoding is 1) consistent and 2) always the same.
+    // we need it be always the same so different git-backup versions can
+    // interoperate with each other.
+    var noncommitv = []struct{
+        sha1  Sha1 // original
+        sha1_ Sha1 // encoded
+        istag bool // is original object a tag object
+    }{
+        {XSha1("f735011c9fcece41219729a33f7876cd8791f659"), XSha1("4f2486e99ff9744751e0756b155e57bb24c453dd"), true},  // tag-to-commit
+        {XSha1("7124713e403925bc772cd252b0dec099f3ced9c5"), XSha1("6b3beabee3e0704fa3269558deab01e9d5d7764e"), true},  // tag-to-tag
+        {XSha1("11e67095628aa17b03436850e690faea3006c25d"), XSha1("89ad5fbeb9d3f0c7bc6366855a09484819289911"), true},  // tag-to-blob
+        {XSha1("ba899e5639273a6fa4d50d684af8db1ae070351e"), XSha1("68ad6a7c31042e53201e47aee6096ed081b6fdb9"), true},  // tag-to-tree
+        {XSha1("61882eb85774ed4401681d800bb9c638031375e2"), XSha1("761f55bcdf119ced3fcf23b69fdc169cbb5fc143"), false}, // ref-to-tree
+        {XSha1("7a3343f584218e973165d943d7c0af47a52ca477"), XSha1("366f3598d662909e2537481852e42b775c7eb837"), false}, // ref-to-blob
+    }
+
+    for _, nc := range noncommitv {
+        // encoded object should be already present
+        _, err := ReadObject2(gb, nc.sha1_)
+        if err != nil {
+            t.Fatalf("encode %s should give %s but expected encoded object not found: %s", nc.sha1, nc.sha1_, err)
+        }
+
+        // decoding encoded object should give original sha1, if it was tag
+        sha1 := obj_recreate_from_commit(gb, nc.sha1_)
+        if nc.istag && sha1 != nc.sha1 {
+            t.Fatalf("decode %s -> %s ;  want %s", nc.sha1_, sha1, nc.sha1)
+        }
+
+        // encoding original object should give sha1_
+        obj_type := xgit("cat-file", "-t", nc.sha1)
+        sha1_ := obj_represent_as_commit(gb, nc.sha1, obj_type)
+        if sha1_ != nc.sha1_ {
+            t.Fatalf("encode %s -> %s ;  want %s", sha1, sha1_, nc.sha1_)
+        }
+    }
+
     // prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
     xgit("prune")
 
@@ -102,14 +147,13 @@ func TestPullRestore(t *testing.T) {
     // verify that just pulled tag objects are now gone after pruning -
     // - they become not directly git-present. The only possibility to
     // get them back is via recreating from encoded commit objects.
-    tags := []string{"11e67095628aa17b03436850e690faea3006c25d",
-                     "ba899e5639273a6fa4d50d684af8db1ae070351e",
-                     "7124713e403925bc772cd252b0dec099f3ced9c5",
-                     "f735011c9fcece41219729a33f7876cd8791f659"}
-    for _, tag := range tags {
-        gerr, _, _ := ggit("cat-file", "-p", tag)
+    for _, nc := range noncommitv {
+        if !nc.istag {
+            continue
+        }
+        gerr, _, _ := ggit("cat-file", "-p", nc.sha1)
         if gerr == nil {
-            t.Fatalf("tag %s still present in backup.git after git-prune", tag)
+            t.Fatalf("tag %s still present in backup.git after git-prune", nc.sha1)
         }
     }
 
