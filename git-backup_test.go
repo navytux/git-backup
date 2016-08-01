@@ -138,6 +138,19 @@ func TestPullRestore(t *testing.T) {
         }
     }
 
+    // verify no garbage is left under refs/backup/
+    dentryv, err := ioutil.ReadDir("refs/backup/")
+    if err != nil && !os.IsNotExist(err) {
+        t.Fatal(err)
+    }
+    if len(dentryv) != 0 {
+        namev := []string{}
+        for _, fi := range dentryv {
+            namev = append(namev, fi.Name())
+        }
+        t.Fatalf("refs/backup/ not empty after pull: %v", namev)
+    }
+
     // prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
     xgit("prune")
 

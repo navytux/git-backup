@@ -510,15 +510,6 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     xgit("update-ref", "-m", "git-backup pull", "HEAD", commit_sha1, HEAD)
 
     // remove no-longer needed backup refs & verify they don't stay
-    // FIXME `delete` deletes only files, but leaves empty dirs around.
-    //       more important: this affect performance of future `git-backup pull` run a *LOT*
-    //
-    //       reason is: `git pull` first check local refs, and for doing so it
-    //       recourse into all directories, even empty ones.
-    //
-    //       https://lab.nexedi.com/lab.nexedi.com/lab.nexedi.com/issues/4
-    //
-    //       -> TODO  also remove empty directories.
     backup_refs_delete := ""
     for _, __ := range backup_refs_list {
         backup_refs_delete += fmt.Sprintf("delete %s %s\n", __.ref, __.sha1)
@@ -529,6 +520,25 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     if __ != "" {
         raisef("Backup refs under %s not deleted properly", backup_refs_work)
     }
+
+    // NOTE  `delete` deletes only files, but leaves empty dirs around.
+    //       more important: this affect performance of future `git-backup pull` run a *LOT*
+    //
+    //       reason is: `git pull` first check local refs, and for doing so it
+    //       recourse into all directories, even empty ones.
+    //
+    //       https://lab.nexedi.com/lab.nexedi.com/lab.nexedi.com/issues/4
+    //
+    //       So remove all dirs under backup_refs_work prefix in the end.
+    //
+    // TODO  Revisit this when reworking fetch to be parallel. Reason is: in
+    //       the process of pulling repositories, the more references we
+    //       accumulate, the longer pull starts to be, so it becomes O(n^2).
+    //       We can avoid quadratic behaviour via removing refs from just
+    //       pulled repo right after the pull.
+    gitdir := xgit("rev-parse", "--git-dir")
+    err := os.RemoveAll(gitdir+"/"+backup_refs_work)
+    raiseif(err) // NOTE err is nil if path does not exist
 
     // if we have working copy - update it
     bare := xgit("rev-parse", "--is-bare-repository")
