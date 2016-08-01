@@ -116,11 +116,20 @@ func do_raise3if1() {
     do_raise3if()
 }
 
+func do_raise4f() {
+    raisef("%d", 4)
+}
+
+func do_raise4f1() {
+    do_raise4f()
+}
+
 
 func TestErrAddCallingContext(t *testing.T) {
     var tests = []struct{ f func(); wanterrcontext string } {
         {do_raise11,    "do_raise11: do_raise1: 1"},
         {do_raise3if1,  "do_raise3if1: do_raise3if: 3"},
+        {do_raise4f1,   "do_raise4f1: do_raise4f: 4"},
     }
 
     for _, tt := range tests {

@@ -61,7 +61,7 @@ func raise(arg interface{}) {
 
 // raise formatted string
 func raisef(format string, a ...interface{}) {
-    raise(fmt.Sprintf(format, a...))
+    panic(aserror(fmt.Sprintf(format, a...)))
 }
 
 // raise if err != nil
