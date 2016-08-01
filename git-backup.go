@@ -67,9 +67,11 @@ import (
     "os"
     pathpkg "path"
     "path/filepath"
+    "runtime"
     "runtime/debug"
     "sort"
     "strings"
+    "sync"
     "syscall"
     "time"
 
@@ -105,6 +107,9 @@ func debugf(format string, a ...interface{}) {
         fmt.Println()
     }
 }
+
+// how many max jobs to spawn
+var njobs = runtime.NumCPU()
 
 // -------- create/extract blob --------
 
@@ -675,6 +680,15 @@ func (br ByRepoPath) Search(prefix string) int {
            })
 }
 
+// request to extract a pack
+type PackExtractReq struct {
+    refs     RefMap // extract pack with objects from this heads
+    repopath string // into repository located here
+
+    // for info only: request was generated restoring from under this backup prefix
+    prefix string
+}
+
 func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) {
     HEAD := xgitSha1("rev-parse", "--verify", HEAD_)
 
@@ -722,120 +736,191 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
     // repotab no longer needed
     repotab = nil
 
-    // walk over specified prefixes restoring files and packs in *.git
-    for _, __ := range restorespecv {
-        prefix, dir := __.prefix, __.dir
+    packxq := make(chan PackExtractReq, 2*njobs) // requests to extract packs
+    errch  := make(chan error)                   // errors from workers
+    stopch := make(chan struct{})                // broadcasts restore has to be cancelled
+    wg := sync.WaitGroup{}
 
-        // ensure dir did not exist before restore run
-        err := os.Mkdir(dir, 0777)
-        raiseif(err)
+    // main worker: walk over specified prefixes restoring files and
+    // scheduling pack extraction requests from *.git -> packxq
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        defer close(packxq)
+        // raised err -> errch
+        here := myfuncname()
+        defer errcatch(func(e *Error) {
+            errch <- erraddcallingcontext(here, e)
+        })
 
-        // files
-        lstree := xgit("ls-tree", "--full-tree", "-r", "-z", "--", HEAD, prefix, RunWith{raw: true})
-        repos_seen := StrSet{} // dirs of *.git seen while restoring files
-        for _, __ := range strings.Split(lstree, "\x00") {
-            if __ == "" {
-                continue // last empty line after last \0
-            }
-            mode, type_, sha1, filename, err := parse_lstree_entry(__)
-            // NOTE
-            //  - `ls-tree -r` shows only leaf objects
-            //  - git-backup repository does not have submodules and the like
-            // -> type should be "blob" only
-            if err != nil || type_ != "blob" {
-                raisef("%s: invalid/unexpected ls-tree entry %q", HEAD, __)
-            }
+    runloop:
+        for _, __ := range restorespecv {
+            prefix, dir := __.prefix, __.dir
 
-            filename = reprefix(prefix, dir, filename)
-            infof("# file %s\t-> %s", prefix, filename)
-            blob_to_file(gb, sha1, mode, filename)
+            // ensure dir did not exist before restore run
+            err := os.Mkdir(dir, 0777)
+            raiseif(err)
 
-            // make sure git will recognize *.git as repo:
-            //   - it should have refs/{heads,tags}/ and objects/pack/ inside.
-            //
-            // NOTE doing it while restoring files, because a repo could be
-            //   empty - without refs at all, and thus next "git packs restore"
-            //   step will not be run for it.
-            filedir := pathpkg.Dir(filename)
-            if strings.HasSuffix(filedir, ".git") && !repos_seen.Contains(filedir) {
-                infof("# repo %s\t-> %s", prefix, filedir)
-                for _, __ := range []string{"refs/heads", "refs/tags", "objects/pack"} {
-                    err := os.MkdirAll(filedir+"/"+__, 0777)
-                    raiseif(err)
+            // files
+            lstree := xgit("ls-tree", "--full-tree", "-r", "-z", "--", HEAD, prefix, RunWith{raw: true})
+            repos_seen := StrSet{} // dirs of *.git seen while restoring files
+            for _, __ := range strings.Split(lstree, "\x00") {
+                if __ == "" {
+                    continue // last empty line after last \0
                 }
-                repos_seen.Add(filedir)
-            }
-        }
+                mode, type_, sha1, filename, err := parse_lstree_entry(__)
+                // NOTE
+                //  - `ls-tree -r` shows only leaf objects
+                //  - git-backup repository does not have submodules and the like
+                // -> type should be "blob" only
+                if err != nil || type_ != "blob" {
+                    raisef("%s: invalid/unexpected ls-tree entry %q", HEAD, __)
+                }
 
-        // git packs
-        for i := ByRepoPath(repov).Search(prefix); i < len(repov); i++ {
-            repo := repov[i]
-            if !strings.HasPrefix(repo.repopath, prefix) {
-                break // repov is sorted - end of repositories with prefix
-            }
+                filename = reprefix(prefix, dir, filename)
+                infof("# file %s\t-> %s", prefix, filename)
+                blob_to_file(gb, sha1, mode, filename)
 
-            repopath := reprefix(prefix, dir, repo.repopath)
-            infof("# git  %s\t-> %s", prefix, repopath)
-
-            // make sure tag/tree/blob objects represented as commits are
-            // present, before we generate pack for restored repo.
-            // ( such objects could be lost e.g. after backup repo repack as they
-            //   are not reachable from backup repo HEAD )
-            for _, __ := range repo.refs {
-                if __.sha1 != __.sha1_ {
-                    obj_recreate_from_commit(gb, __.sha1_)
+                // make sure git will recognize *.git as repo:
+                //   - it should have refs/{heads,tags}/ and objects/pack/ inside.
+                //
+                // NOTE doing it while restoring files, because a repo could be
+                //   empty - without refs at all, and thus next "git packs restore"
+                //   step will not be run for it.
+                filedir := pathpkg.Dir(filename)
+                if strings.HasSuffix(filedir, ".git") && !repos_seen.Contains(filedir) {
+                    infof("# repo %s\t-> %s", prefix, filedir)
+                    for _, __ := range []string{"refs/heads", "refs/tags", "objects/pack"} {
+                        err := os.MkdirAll(filedir+"/"+__, 0777)
+                        raiseif(err)
+                    }
+                    repos_seen.Add(filedir)
                 }
             }
 
-            // extract pack for that repo from big backup pack + decoded tags
-            pack_argv := []string{
-                    "pack-objects",
-                    "--revs", // include all objects referencable from input sha1 list
-                    "--reuse-object", "--reuse-delta", "--delta-base-offset"}
-            if verbose <= 0 {
-                pack_argv = append(pack_argv, "-q")
-            }
-            pack_argv = append(pack_argv, repopath+"/objects/pack/pack")
+            // git packs
+            for i := ByRepoPath(repov).Search(prefix); i < len(repov); i++ {
+                repo := repov[i]
+                if !strings.HasPrefix(repo.repopath, prefix) {
+                    break // repov is sorted - end of repositories with prefix
+                }
 
-            xgit2(pack_argv, RunWith{stdin: repo.refs.Sha1HeadsStr(), stderr: gitprogress()})
+                // make sure tag/tree/blob objects represented as commits are
+                // present, before we generate pack for restored repo.
+                // ( such objects could be lost e.g. after backup repo repack as they
+                //   are not reachable from backup repo HEAD )
+                for _, __ := range repo.refs {
+                    if __.sha1 != __.sha1_ {
+                        obj_recreate_from_commit(gb, __.sha1_)
+                    }
+                }
 
-            // verify that extracted repo refs match backup.refs index after extraction
-            x_ref_list := xgit("--git-dir=" + repopath,
-                               "for-each-ref", "--format=%(objectname) %(refname)")
-            repo_refs := repo.refs.Values()
-            sort.Sort(ByRefname(repo_refs))
-            repo_ref_listv := make([]string, 0, len(repo_refs))
-            for _, __ := range repo_refs {
-                repo_ref_listv = append(repo_ref_listv, fmt.Sprintf("%s refs/%s", __.sha1, __.refname))
-            }
-            repo_ref_list := strings.Join(repo_ref_listv, "\n")
-            if x_ref_list != repo_ref_list {
-                raisef("E: extracted %s refs corrupt", repopath)
-            }
+                select {
+                case packxq <- PackExtractReq{refs: repo.refs,
+                                repopath: reprefix(prefix, dir, repo.repopath),
+                                prefix: prefix}:
 
-            // check connectivity in recreated repository.
-            //
-            // This way we verify that extracted pack indeed contains all
-            // objects for all refs in the repo.
-            //
-            // Compared to fsck we do not re-compute sha1 sum of objects which
-            // is significantly faster.
-            gerr, _, _ := ggit("--git-dir=" + repopath,
-                    "rev-list", "--objects", "--stdin", "--quiet", RunWith{stdin: repo.refs.Sha1HeadsStr()})
-            if gerr != nil {
-                fmt.Fprintln(os.Stderr, "E: Problem while checking connectivity of extracted repo:")
-                raise(gerr)
+                case <-stopch:
+                    break runloop
+                }
             }
-
-            // XXX disabled because it is slow
-            // // NOTE progress goes to stderr, problems go to stdout
-            // xgit("--git-dir=" + repopath, "fsck",
-            //         # only check that traversal from refs is ok: this unpacks
-            //         # commits and trees and verifies blob objects are there,
-            //         # but do _not_ unpack blobs =fast.
-            //         "--connectivity-only",
-            //         RunWith{stdout: gitprogress(), stderr: gitprogress()})
         }
+    }()
+
+    // pack workers: packxq -> extract packs
+    for i := 0; i < njobs; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            // raised err -> errch
+            here := myfuncname()
+            defer errcatch(func(e *Error) {
+                errch <- erraddcallingcontext(here, e)
+            })
+
+        runloop:
+            for {
+                select {
+                case <-stopch:
+                    break runloop
+
+                case p, ok := <-packxq:
+                    if !ok {
+                        break runloop
+                    }
+                    infof("# git  %s\t-> %s", p.prefix, p.repopath)
+
+                    // extract pack for that repo from big backup pack + decoded tags
+                    pack_argv := []string{
+                            "-c", "pack.threads=1", // occupy only 1 CPU + it packs better
+                            "pack-objects",
+                            "--revs", // include all objects referencable from input sha1 list
+                            "--reuse-object", "--reuse-delta", "--delta-base-offset"}
+                    if verbose <= 0 {
+                        pack_argv = append(pack_argv, "-q")
+                    }
+                    pack_argv = append(pack_argv, p.repopath+"/objects/pack/pack")
+
+                    xgit2(pack_argv, RunWith{stdin: p.refs.Sha1HeadsStr(), stderr: gitprogress()})
+
+                    // verify that extracted repo refs match backup.refs index after extraction
+                    x_ref_list := xgit("--git-dir=" + p.repopath,
+                                       "for-each-ref", "--format=%(objectname) %(refname)")
+                    repo_refs := p.refs.Values()
+                    sort.Sort(ByRefname(repo_refs))
+                    repo_ref_listv := make([]string, 0, len(repo_refs))
+                    for _, __ := range repo_refs {
+                        repo_ref_listv = append(repo_ref_listv, fmt.Sprintf("%s refs/%s", __.sha1, __.refname))
+                    }
+                    repo_ref_list := strings.Join(repo_ref_listv, "\n")
+                    if x_ref_list != repo_ref_list {
+                        raisef("E: extracted %s refs corrupt", p.repopath)
+                    }
+
+                    // check connectivity in recreated repository.
+                    //
+                    // This way we verify that extracted pack indeed contains all
+                    // objects for all refs in the repo.
+                    //
+                    // Compared to fsck we do not re-compute sha1 sum of objects which
+                    // is significantly faster.
+                    gerr, _, _ := ggit("--git-dir=" + p.repopath,
+                            "rev-list", "--objects", "--stdin", "--quiet", RunWith{stdin: p.refs.Sha1HeadsStr()})
+                    if gerr != nil {
+                        fmt.Fprintln(os.Stderr, "E: Problem while checking connectivity of extracted repo:")
+                        raise(gerr)
+                    }
+
+                    // XXX disabled because it is slow
+                    // // NOTE progress goes to stderr, problems go to stdout
+                    // xgit("--git-dir=" + p.repopath, "fsck",
+                    //         # only check that traversal from refs is ok: this unpacks
+                    //         # commits and trees and verifies blob objects are there,
+                    //         # but do _not_ unpack blobs =fast.
+                    //         "--connectivity-only",
+                    //         RunWith{stdout: gitprogress(), stderr: gitprogress()})
+                }
+            }
+        }()
+    }
+
+    // wait for workers to finish & collect/reraise their errors
+    go func() {
+        wg.Wait()
+        close(errch)
+    }()
+
+    ev := Errorv{}
+    for e := range errch {
+        // tell everything to stop on first error
+        if len(ev) == 0 {
+            close(stopch)
+        }
+        ev = append(ev, e)
+    }
+
+    if len(ev) != 0 {
+        raise(ev)
     }
 }
 
@@ -856,7 +941,8 @@ func usage() {
     -h --help       this help text.
     -v              increase verbosity.
     -q              decrease verbosity.
-`)
+    -j N            allow max N jobs to spawn; default=NPROC (%d on this system)
+`, njobs)
 }
 
 func main() {
@@ -864,6 +950,7 @@ func main() {
     quiet := 0
     flag.Var((*countFlag)(&verbose), "v", "verbosity level")
     flag.Var((*countFlag)(&quiet), "q", "decrease verbosity")
+    flag.IntVar(&njobs, "j", njobs, "allow max N jobs to spawn")
     flag.Parse()
     verbose -= quiet
     argv := flag.Args()
