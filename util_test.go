@@ -33,6 +33,25 @@ func TestStringBytes(t *testing.T) {
     if !reflect.DeepEqual(b1, b)    { t.Error("string -> Bytes  not aliased") }
 }
 
+func TestSplitLines(t *testing.T) {
+    var tests = []struct { input, sep string; output []string } {
+        {"",                    "\n",   []string{}},
+        {"hello",               "\n",   []string{"hello"}},
+        {"hello\n",             "\n",   []string{"hello"}},
+        {"hello\nworld",        "\n",   []string{"hello", "world"}},
+        {"hello\nworld\n",      "\n",   []string{"hello", "world"}},
+        {"hello\x00world\x00",  "\n",   []string{"hello\x00world\x00"}},
+        {"hello\x00world\x00",  "\x00", []string{"hello", "world"}},
+    }
+
+    for _, tt := range tests {
+        sv := splitlines(tt.input, tt.sep)
+        if !reflect.DeepEqual(sv, tt.output) {
+            t.Errorf("splitlines(%q, %q) -> %q  ; want %q", tt.input, tt.sep, sv, tt.output)
+        }
+    }
+}
+
 func TestSplit2(t *testing.T) {
     var tests = []struct { input, s1, s2 string; ok bool } {
         {"", "", "", false},

@@ -44,6 +44,17 @@ func String(b []byte) string {
     return s
 }
 
+// split string into lines. The last line, if it is empty, is omitted from the result
+// (rationale is: string.Split("hello\nworld\n", "\n") -> ["hello", "world", ""])
+func splitlines(s, sep string) []string {
+    sv := strings.Split(s, sep)
+    l := len(sv)
+    if l > 0 && sv[l-1] == "" {
+        sv = sv[:l-1]
+    }
+    return sv
+}
+
 // split string by sep and expect exactly 2 parts
 func split2(s, sep string) (s1, s2 string, err error) {
     parts := strings.Split(s, sep)

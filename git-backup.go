@@ -459,7 +459,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     backup_refsv := []string{}        // backup.refs content
     backup_refs_parents := Sha1Set{}  // sha1 for commit parents, obtained from refs
     noncommit_seen := map[Sha1]Sha1{} // {} sha1 -> sha1_ (there are many duplicate tags)
-    for _, __ := range strings.Split(backup_refs_dump, "\n") {
+    for _, __ := range splitlines(backup_refs_dump, "\n") {
         sha1, type_, ref := Sha1{}, "", ""
         _, err := fmt.Sscanf(__, "%s %s %s\n", &sha1, &type_, &ref)
         if err != nil {
@@ -705,7 +705,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
     // read backup refs index
     repotab := map[string]*BackupRepo{} // repo.path -> repo
     backup_refs := xgit("cat-file", "blob", fmt.Sprintf("%s:backup.refs", HEAD))
-    for _, refentry := range strings.Split(backup_refs, "\n") {
+    for _, refentry := range splitlines(backup_refs, "\n") {
         // sha1 prefix+refname (sha1_)
         badentry := func() { raisef("E: invalid backup.refs entry: %q", refentry) }
         refentryv := strings.Fields(refentry)
@@ -774,10 +774,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
             // files
             lstree := xgit("ls-tree", "--full-tree", "-r", "-z", "--", HEAD, prefix, RunWith{raw: true})
             repos_seen := StrSet{} // dirs of *.git seen while restoring files
-            for _, __ := range strings.Split(lstree, "\x00") {
-                if __ == "" {
-                    continue // last empty line after last \0
-                }
+            for _, __ := range splitlines(lstree, "\x00") {
                 mode, type_, sha1, filename, err := parse_lstree_entry(__)
                 // NOTE
                 //  - `ls-tree -r` shows only leaf objects

@@ -98,6 +98,9 @@ func TestPullRestore(t *testing.T) {
     }
 
     // pull from testdata
+    my0 := mydir + "/testdata/0"
+    cmd_pull(gb, []string{my0+":b0"}) // only empty repo in testdata/0
+
     my1 := mydir + "/testdata/1"
     cmd_pull(gb, []string{my1+":b1"})
 
