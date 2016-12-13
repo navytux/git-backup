@@ -19,6 +19,8 @@ import (
     "os"
     "os/exec"
     "strings"
+
+    "lab.nexedi.com/kirr/go123/exc"
 )
 
 // how/whether to redirect stdio of spawned process
@@ -164,7 +166,7 @@ func ggit2(argv []string, ctx RunWith) (err *GitError, stdout, stderr string) {
     e, stdout, stderr := _git(argv, ctx)
     eexec, _ := e.(*exec.ExitError)
     if e != nil && eexec == nil {
-        raisef("git %s : ", strings.Join(argv, " "), e)
+        exc.Raisef("git %s : ", strings.Join(argv, " "), e)
     }
     if eexec != nil {
         err = &GitError{GitErrContext{argv, ctx.stdin, stdout, stderr}, eexec}
@@ -181,7 +183,7 @@ func xgit(argv ...interface{}) string {
 func xgit2(argv []string, ctx RunWith) string {
     gerr, stdout, _ := ggit2(argv, ctx)
     if gerr != nil {
-        raise(gerr)
+        exc.Raise(gerr)
     }
     return stdout
 }
@@ -205,11 +207,11 @@ func (e *GitSha1Error) Error() string {
 func xgit2Sha1(argv []string, ctx RunWith) Sha1 {
     gerr, stdout, stderr := ggit2(argv, ctx)
     if gerr != nil {
-        raise(gerr)
+        exc.Raise(gerr)
     }
     sha1, err := Sha1Parse(stdout)
     if err != nil {
-        raise(&GitSha1Error{GitErrContext{argv, ctx.stdin, stdout, stderr}})
+        exc.Raise(&GitSha1Error{GitErrContext{argv, ctx.stdin, stdout, stderr}})
     }
     return sha1
 }

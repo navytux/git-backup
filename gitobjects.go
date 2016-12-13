@@ -21,6 +21,8 @@ import (
     "sync"
     "time"
 
+    "lab.nexedi.com/kirr/go123/exc"
+
     git "github.com/libgit2/git2go"
 )
 
@@ -96,11 +98,11 @@ type Tag struct {
 //    (libgit2 does not provide such functionality at all)
 func xload_tag(g *git.Repository, tag_sha1 Sha1) (tag *Tag, tag_obj *git.OdbObject) {
     tag_obj, err := ReadObject(g, tag_sha1, git.ObjectTag)
-    raiseif(err)
+    exc.Raiseif(err)
 
     tag, err = tag_parse(String(tag_obj.Data()))
     if err != nil {
-        raise(&TagLoadError{tag_sha1, err})
+        exc.Raise(&TagLoadError{tag_sha1, err})
     }
     return tag, tag_obj
 }
@@ -225,7 +227,7 @@ func xcommit_tree2(g *git.Repository, tree Sha1, parents []Sha1, msg string, aut
     commit += fmt.Sprintf("\n%s", msg)
 
     sha1, err := WriteObject(g, Bytes(commit), git.ObjectCommit)
-    raiseif(err)
+    exc.Raiseif(err)
 
     return sha1
 }

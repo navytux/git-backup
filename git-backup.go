@@ -75,6 +75,10 @@ import (
     "syscall"
     "time"
 
+    "lab.nexedi.com/kirr/go123/exc"
+    "lab.nexedi.com/kirr/go123/myname"
+    "lab.nexedi.com/kirr/go123/xerr"
+
     git "github.com/libgit2/git2go"
 )
 
@@ -122,20 +126,20 @@ func file_to_blob(g *git.Repository, path string) (Sha1, uint32) {
     var st syscall.Stat_t
     err := syscall.Lstat(path, &st)
     if err != nil {
-        raise(&os.PathError{"lstat", path, err})
+        exc.Raise(&os.PathError{"lstat", path, err})
     }
 
     if st.Mode&syscall.S_IFMT == syscall.S_IFLNK {
         __, err := os.Readlink(path)
         blob_content = Bytes(__)
-        raiseif(err)
+        exc.Raiseif(err)
     } else {
         blob_content, err = ioutil.ReadFile(path)
-        raiseif(err)
+        exc.Raiseif(err)
     }
 
     blob_sha1, err := WriteObject(g, blob_content, git.ObjectBlob)
-    raiseif(err)
+    exc.Raiseif(err)
 
     return blob_sha1, st.Mode
 }
@@ -143,19 +147,19 @@ func file_to_blob(g *git.Repository, path string) (Sha1, uint32) {
 // blob_sha1, mode -> file
 func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
     blob, err := ReadObject(g, blob_sha1, git.ObjectBlob)
-    raiseif(err)
+    exc.Raiseif(err)
     blob_content := blob.Data()
 
     err = os.MkdirAll(pathpkg.Dir(path), 0777)
-    raiseif(err)
+    exc.Raiseif(err)
 
     if mode&syscall.S_IFMT == syscall.S_IFLNK {
         err = os.Symlink(String(blob_content), path)
-        raiseif(err)
+        exc.Raiseif(err)
     } else {
         // NOTE mode is native - we cannot use ioutil.WriteFile() directly
         err = writefile(path, blob_content, mode)
-        raiseif(err)
+        exc.Raiseif(err)
     }
 }
 
@@ -174,7 +178,7 @@ func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
 var tag_tree_blob = StrSet{"tag": {}, "tree": {}, "blob": {}}
 func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1 {
     if !tag_tree_blob.Contains(obj_type) {
-        raisef("%s (%s): cannot encode as commit", sha1, obj_type)
+        exc.Raisef("%s (%s): cannot encode as commit", sha1, obj_type)
     }
 
     // first line in commit msg = object type
@@ -236,7 +240,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
         return zcommit_tree(mktree_empty(), []Sha1{commit1}, obj_encoded)
     }
 
-    raisef("%s (%q): unknown tagged type", sha1, tagged_type)
+    exc.Raisef("%s (%q): unknown tagged type", sha1, tagged_type)
     panic(0)
 }
 
@@ -246,7 +250,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
 //   - tag:       recreated object sha1
 //   - tree/blob: null sha1
 func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) Sha1 {
-    xraise  := func(info interface{})           { raise(&RecreateObjError{commit_sha1, info}) }
+    xraise  := func(info interface{})           { exc.Raise(&RecreateObjError{commit_sha1, info}) }
     xraisef := func(f string, a ...interface{}) { xraise(fmt.Sprintf(f, a...)) }
 
     commit, err := g.LookupCommit(commit_sha1.AsOid())
@@ -273,7 +277,7 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) Sha1 {
 
     // re-create tag object
     tag_sha1, err := WriteObject(g, Bytes(obj_raw), git.ObjectTag)
-    raiseif(err)
+    exc.Raiseif(err)
 
     // the original tagged object should be already in repository, because we
     // always attach it to encoding commit one way or another,
@@ -376,7 +380,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
         // prefix namespace and this way won't leave stale removed things)
         xgit("rm", "--cached", "-r", "--ignore-unmatch", "--", prefix)
 
-        here := myfuncname()
+        here := myname.Func()
         err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) (errout error) {
             // any error -> stop
             if err != nil {
@@ -385,8 +389,8 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
             // propagate exceptions properly via filepath.Walk as errors with calling context
             // (filepath is not our code)
-            defer errcatch(func(e *Error) {
-                errout = erraddcallingcontext(here, e)
+            defer exc.Catch(func(e *exc.Error) {
+                errout = exc.Addcallingcontext(here, e)
             })
 
             // files -> blobs + queue info for adding blobs to index
@@ -429,9 +433,9 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
         // re-raise / raise error after Walk
         if err != nil {
-            e := aserror(err)
-            e = erraddcontext(e, "pulling from "+dir)
-            raise(e)
+            e := exc.Aserror(err)
+            e = exc.Addcontext(e, "pulling from "+dir)
+            exc.Raise(e)
         }
     }
 
@@ -463,7 +467,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
         sha1, type_, ref := Sha1{}, "", ""
         _, err := fmt.Sscanf(__, "%s %s %s\n", &sha1, &type_, &ref)
         if err != nil {
-            raisef("%s: strange for-each-ref entry %q", backup_refs_work, __)
+            exc.Raisef("%s: strange for-each-ref entry %q", backup_refs_work, __)
         }
         backup_refs_list = append(backup_refs_list, Ref{ref, sha1})
         backup_refs_entry := fmt.Sprintf("%s %s", sha1, strip_prefix(backup_refs_work, ref))
@@ -518,7 +522,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     xgit("update-ref", "--stdin", RunWith{stdin: backup_refs_delete})
     __ := xgit("for-each-ref", backup_refs_work)
     if __ != "" {
-        raisef("Backup refs under %s not deleted properly", backup_refs_work)
+        exc.Raisef("Backup refs under %s not deleted properly", backup_refs_work)
     }
 
     // NOTE  `delete` deletes only files, but leaves empty dirs around.
@@ -538,7 +542,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     //       pulled repo right after the pull.
     gitdir := xgit("rev-parse", "--git-dir")
     err := os.RemoveAll(gitdir+"/"+backup_refs_work)
-    raiseif(err) // NOTE err is nil if path does not exist
+    exc.Raiseif(err) // NOTE err is nil if path does not exist
 
     // if we have working copy - update it
     bare := xgit("rev-parse", "--is-bare-repository")
@@ -610,11 +614,11 @@ func cmd_restore(gb *git.Repository, argv []string) {
 func reporef_split(reporef string) (repo, ref string) {
     dotgit := strings.Index(reporef, ".git/")
     if dotgit == -1 {
-        raisef("E: %s is not a ref for a git repo", reporef)
+        exc.Raisef("E: %s is not a ref for a git repo", reporef)
     }
     repo, ref = reporef[:dotgit+4], reporef[dotgit+4+1:]
     repo, err := path_refunescape(repo) // unescape repo name we originally escaped when making backup
-    raiseif(err)
+    exc.Raiseif(err)
     return repo, ref
 }
 
@@ -707,7 +711,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
     backup_refs := xgit("cat-file", "blob", fmt.Sprintf("%s:backup.refs", HEAD))
     for _, refentry := range splitlines(backup_refs, "\n") {
         // sha1 prefix+refname (sha1_)
-        badentry := func() { raisef("E: invalid backup.refs entry: %q", refentry) }
+        badentry := func() { exc.Raisef("E: invalid backup.refs entry: %q", refentry) }
         refentryv := strings.Fields(refentry)
         if !(2 <= len(refentryv) && len(refentryv) <= 3) {
             badentry()
@@ -730,7 +734,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
         }
 
         if _, alreadyin := repo.refs[ref]; alreadyin {
-            raisef("E: duplicate ref %s in backup.refs", reporef)
+            exc.Raisef("E: duplicate ref %s in backup.refs", reporef)
         }
         repo.refs[ref] = BackupRefSha1{sha1, sha1_}
     }
@@ -758,9 +762,9 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
         defer wg.Done()
         defer close(packxq)
         // raised err -> errch
-        here := myfuncname()
-        defer errcatch(func(e *Error) {
-            errch <- erraddcallingcontext(here, e)
+        here := myname.Func()
+        defer exc.Catch(func(e *exc.Error) {
+            errch <- exc.Addcallingcontext(here, e)
         })
 
     runloop:
@@ -769,7 +773,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 
             // ensure dir did not exist before restore run
             err := os.Mkdir(dir, 0777)
-            raiseif(err)
+            exc.Raiseif(err)
 
             // files
             lstree := xgit("ls-tree", "--full-tree", "-r", "-z", "--", HEAD, prefix, RunWith{raw: true})
@@ -781,7 +785,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
                 //  - git-backup repository does not have submodules and the like
                 // -> type should be "blob" only
                 if err != nil || type_ != "blob" {
-                    raisef("%s: invalid/unexpected ls-tree entry %q", HEAD, __)
+                    exc.Raisef("%s: invalid/unexpected ls-tree entry %q", HEAD, __)
                 }
 
                 filename = reprefix(prefix, dir, filename)
@@ -799,7 +803,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
                     infof("# repo %s\t-> %s", prefix, filedir)
                     for _, __ := range []string{"refs/heads", "refs/tags", "objects/pack"} {
                         err := os.MkdirAll(filedir+"/"+__, 0777)
-                        raiseif(err)
+                        exc.Raiseif(err)
                     }
                     repos_seen.Add(filedir)
                 }
@@ -840,9 +844,9 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
         go func() {
             defer wg.Done()
             // raised err -> errch
-            here := myfuncname()
-            defer errcatch(func(e *Error) {
-                errch <- erraddcallingcontext(here, e)
+            here := myname.Func()
+            defer exc.Catch(func(e *exc.Error) {
+                errch <- exc.Addcallingcontext(here, e)
             })
 
         runloop:
@@ -881,7 +885,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
                     }
                     repo_ref_list := strings.Join(repo_ref_listv, "\n")
                     if x_ref_list != repo_ref_list {
-                        raisef("E: extracted %s refs corrupt", p.repopath)
+                        exc.Raisef("E: extracted %s refs corrupt", p.repopath)
                     }
 
                     // check connectivity in recreated repository.
@@ -895,7 +899,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
                             "rev-list", "--objects", "--stdin", "--quiet", RunWith{stdin: p.refs.Sha1HeadsStr()})
                     if gerr != nil {
                         fmt.Fprintln(os.Stderr, "E: Problem while checking connectivity of extracted repo:")
-                        raise(gerr)
+                        exc.Raise(gerr)
                     }
 
                     // XXX disabled because it is slow
@@ -917,7 +921,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
         close(errch)
     }()
 
-    ev := Errorv{}
+    ev := xerr.Errorv{}
     for e := range errch {
         // tell everything to stop on first error
         if len(ev) == 0 {
@@ -927,7 +931,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
     }
 
     if len(ev) != 0 {
-        raise(ev)
+        exc.Raise(ev)
     }
 }
 
@@ -974,9 +978,9 @@ func main() {
     }
 
     // catch Error and report info from it
-    here := myfuncname()
-    defer errcatch(func(e *Error) {
-        e = erraddcallingcontext(here, e)
+    here := myname.Func()
+    defer exc.Catch(func(e *exc.Error) {
+        e = exc.Addcallingcontext(here, e)
         fmt.Fprintln(os.Stderr, e)
 
         // also show traceback if debug
@@ -990,7 +994,7 @@ func main() {
 
     // backup repository
     gb, err := git.OpenRepository(".")
-    raiseif(err)
+    exc.Raiseif(err)
 
     cmd(gb, argv[1:])
 }

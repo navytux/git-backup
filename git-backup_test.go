@@ -22,6 +22,10 @@ import (
     "syscall"
     "testing"
 
+    "lab.nexedi.com/kirr/go123/exc"
+    "lab.nexedi.com/kirr/go123/myname"
+    "lab.nexedi.com/kirr/go123/xruntime"
+
     git "github.com/libgit2/git2go"
 )
 
@@ -51,16 +55,16 @@ func XSha1(s string) Sha1 {
 // verify end-to-end pull-restore
 func TestPullRestore(t *testing.T) {
     // if something raises -> don't let testing panic - report it as proper error with context.
-    here := myfuncname()
-    defer errcatch(func(e *Error) {
-        e = erraddcallingcontext(here, e)
+    here := myname.Func()
+    defer exc.Catch(func(e *exc.Error) {
+        e = exc.Addcallingcontext(here, e)
 
         // add file:line for failing code inside testing function - so we have exact context to debug
         failedat := ""
-        for _, f := range xtraceback(1) {
+        for _, f := range xruntime.Traceback(1) {
             if f.Name() == here {
                 // TODO(go1.7) -> f.File, f.Line  (f becomes runtime.Frame)
-                file, line := f.FileLine(f.pc - 1)
+                file, line := f.FileLine(f.Pc - 1)
                 failedat = fmt.Sprintf("%s:%d", filepath.Base(file), line)
                 break
             }
@@ -251,7 +255,7 @@ func TestPullRestore(t *testing.T) {
     // now try to pull corrupt repo - pull should refuse if transferred pack contains bad objects
     my2 := mydir + "/testdata/2"
     func() {
-        defer errcatch(func(e *Error) {
+        defer exc.Catch(func(e *exc.Error) {
             // it ok - pull should raise
         })
         cmd_pull(gb, []string{my2+":b2"})
