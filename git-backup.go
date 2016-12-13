@@ -79,6 +79,7 @@ import (
     "lab.nexedi.com/kirr/go123/mem"
     "lab.nexedi.com/kirr/go123/myname"
     "lab.nexedi.com/kirr/go123/xerr"
+    "lab.nexedi.com/kirr/go123/xflag"
     "lab.nexedi.com/kirr/go123/xstrings"
 
     git "github.com/libgit2/git2go"
@@ -961,8 +962,8 @@ func usage() {
 func main() {
     flag.Usage = usage
     quiet := 0
-    flag.Var((*countFlag)(&verbose), "v", "verbosity level")
-    flag.Var((*countFlag)(&quiet), "q", "decrease verbosity")
+    flag.Var((*xflag.Count)(&verbose), "v", "verbosity level")
+    flag.Var((*xflag.Count)(&quiet), "q", "decrease verbosity")
     flag.IntVar(&njobs, "j", njobs, "allow max N jobs to spawn")
     flag.Parse()
     verbose -= quiet
