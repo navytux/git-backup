@@ -25,6 +25,7 @@ import (
     "lab.nexedi.com/kirr/go123/exc"
     "lab.nexedi.com/kirr/go123/myname"
     "lab.nexedi.com/kirr/go123/xruntime"
+    "lab.nexedi.com/kirr/go123/xstrings"
 
     git "github.com/libgit2/git2go"
 )
@@ -197,7 +198,7 @@ func TestPullRestore(t *testing.T) {
     gitObjectsRe := regexp.MustCompile(`\.git/objects/`)
     for _, diffline := range strings.Split(diff, "\n") {
         // :srcmode dstmode srcsha1 dstsha1 status\tpath
-        _, path, err := headtail(diffline, "\t")
+        _, path, err := xstrings.HeadTail(diffline, "\t")
         if err != nil {
             t.Fatalf("restorecheck: cannot parse diff line %q", diffline)
         }

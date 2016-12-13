@@ -23,6 +23,7 @@ import (
 
     "lab.nexedi.com/kirr/go123/exc"
     "lab.nexedi.com/kirr/go123/mem"
+    "lab.nexedi.com/kirr/go123/xstrings"
 
     git "github.com/libgit2/git2go"
 )
@@ -129,7 +130,7 @@ func tag_parse(tag_raw string) (*Tag, error) {
 // parse lstree entry
 func parse_lstree_entry(lsentry string) (mode uint32, type_ string, sha1 Sha1, filename string, err error) {
     // <mode> SP <type> SP <object> TAB <file>      # NOTE file can contain spaces
-    __, filename, err1 := headtail(lsentry, "\t")
+    __, filename, err1 := xstrings.HeadTail(lsentry, "\t")
     _, err2 := fmt.Sscanf(__, "%o %s %s\n", &mode, &type_, &sha1)
 
     if err1 != nil || err2 != nil {

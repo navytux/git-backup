@@ -25,35 +25,6 @@ import (
     "lab.nexedi.com/kirr/go123/mem"
 )
 
-// split string into lines. The last line, if it is empty, is omitted from the result
-// (rationale is: string.Split("hello\nworld\n", "\n") -> ["hello", "world", ""])
-func splitlines(s, sep string) []string {
-    sv := strings.Split(s, sep)
-    l := len(sv)
-    if l > 0 && sv[l-1] == "" {
-        sv = sv[:l-1]
-    }
-    return sv
-}
-
-// split string by sep and expect exactly 2 parts
-func split2(s, sep string) (s1, s2 string, err error) {
-    parts := strings.Split(s, sep)
-    if len(parts) != 2 {
-        return "", "", fmt.Errorf("split2: %q has %v parts (expected 2, sep: %q)", s, len(parts), sep)
-    }
-    return parts[0], parts[1], nil
-}
-
-// (head+sep+tail) -> head, tail
-func headtail(s, sep string) (head, tail string, err error) {
-    parts := strings.SplitN(s, sep, 2)
-    if len(parts) != 2 {
-        return "", "", fmt.Errorf("headtail: %q has no %q", s, sep)
-    }
-    return parts[0], parts[1], nil
-}
-
 // strip_prefix("/a/b", "/a/b/c/d/e") -> "c/d/e" (without leading /)
 // path must start with prefix
 func strip_prefix(prefix, path string) string {
