@@ -21,6 +21,7 @@ import (
     "strings"
 
     "lab.nexedi.com/kirr/go123/exc"
+    "lab.nexedi.com/kirr/go123/mem"
 )
 
 // how/whether to redirect stdio of spawned process
@@ -78,8 +79,8 @@ func _git(argv []string, ctx RunWith) (err error, stdout, stderr string) {
     }
 
     err = cmd.Run()
-    stdout = String(stdoutBuf.Bytes())
-    stderr = String(stderrBuf.Bytes())
+    stdout = mem.String(stdoutBuf.Bytes())
+    stderr = mem.String(stderrBuf.Bytes())
 
     if !ctx.raw {
         // prettify stdout (e.g. so that 'sha1\n' becomes 'sha1' and can be used directly

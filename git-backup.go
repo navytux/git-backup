@@ -76,6 +76,7 @@ import (
     "time"
 
     "lab.nexedi.com/kirr/go123/exc"
+    "lab.nexedi.com/kirr/go123/mem"
     "lab.nexedi.com/kirr/go123/myname"
     "lab.nexedi.com/kirr/go123/xerr"
 
@@ -131,7 +132,7 @@ func file_to_blob(g *git.Repository, path string) (Sha1, uint32) {
 
     if st.Mode&syscall.S_IFMT == syscall.S_IFLNK {
         __, err := os.Readlink(path)
-        blob_content = Bytes(__)
+        blob_content = mem.Bytes(__)
         exc.Raiseif(err)
     } else {
         blob_content, err = ioutil.ReadFile(path)
@@ -154,7 +155,7 @@ func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
     exc.Raiseif(err)
 
     if mode&syscall.S_IFMT == syscall.S_IFLNK {
-        err = os.Symlink(String(blob_content), path)
+        err = os.Symlink(mem.String(blob_content), path)
         exc.Raiseif(err)
     } else {
         // NOTE mode is native - we cannot use ioutil.WriteFile() directly
@@ -192,7 +193,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
         tag, tag_obj := xload_tag(g, sha1)
         tagged_type = tag.tagged_type
         tagged_sha1 = tag.tagged_sha1
-        obj_encoded += String(tag_obj.Data())
+        obj_encoded += mem.String(tag_obj.Data())
     } else {
         // for tree/blob we only care that object stays reachable
         tagged_type = obj_type
@@ -276,7 +277,7 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) Sha1 {
     }
 
     // re-create tag object
-    tag_sha1, err := WriteObject(g, Bytes(obj_raw), git.ObjectTag)
+    tag_sha1, err := WriteObject(g, mem.Bytes(obj_raw), git.ObjectTag)
     exc.Raiseif(err)
 
     // the original tagged object should be already in repository, because we

@@ -17,32 +17,13 @@ import (
     "encoding/hex"
     "fmt"
     "os"
-    "reflect"
     "strings"
     "syscall"
     "unicode"
     "unicode/utf8"
-    "unsafe"
+
+    "lab.nexedi.com/kirr/go123/mem"
 )
-
-// string -> []byte without copying
-func Bytes(s string) []byte {
-    var b []byte
-    bp := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-    bp.Data = (*reflect.StringHeader)(unsafe.Pointer(&s)).Data
-    bp.Cap = len(s)
-    bp.Len = len(s)
-    return b
-}
-
-// []byte -> string without copying
-func String(b []byte) string {
-    var s string
-    sp := (*reflect.StringHeader)(unsafe.Pointer(&s))
-    sp.Data = (*reflect.SliceHeader)(unsafe.Pointer(&b)).Data
-    sp.Len = len(b)
-    return s
-}
 
 // split string into lines. The last line, if it is empty, is omitted from the result
 // (rationale is: string.Split("hello\nworld\n", "\n") -> ["hello", "world", ""])
@@ -212,7 +193,7 @@ func path_refunescape(s string) (string, error) {
         }
         out = append(out, c)
     }
-    return String(out), nil
+    return mem.String(out), nil
 }
 
 type EscapeError string

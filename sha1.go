@@ -18,6 +18,8 @@ import (
     "encoding/hex"
     "fmt"
 
+    "lab.nexedi.com/kirr/go123/mem"
+
     git "github.com/libgit2/git2go"
 )
 
@@ -45,7 +47,7 @@ func Sha1Parse(sha1str string) (Sha1, error) {
     if hex.DecodedLen(len(sha1str)) != SHA1_RAWSIZE {
         return Sha1{}, fmt.Errorf("sha1parse: %q invalid", sha1str)
     }
-    _, err := hex.Decode(sha1.sha1[:], Bytes(sha1str))
+    _, err := hex.Decode(sha1.sha1[:], mem.Bytes(sha1str))
     if err != nil {
         return Sha1{}, fmt.Errorf("sha1parse: %q invalid: %s", sha1str, err)
     }
@@ -68,7 +70,7 @@ func (sha1 *Sha1) Scan(s fmt.ScanState, ch rune) error {
         return err
     }
 
-    *sha1, err = Sha1Parse(String(tok))
+    *sha1, err = Sha1Parse(mem.String(tok))
     return err
 }
 

@@ -22,6 +22,7 @@ import (
     "time"
 
     "lab.nexedi.com/kirr/go123/exc"
+    "lab.nexedi.com/kirr/go123/mem"
 
     git "github.com/libgit2/git2go"
 )
@@ -100,7 +101,7 @@ func xload_tag(g *git.Repository, tag_sha1 Sha1) (tag *Tag, tag_obj *git.OdbObje
     tag_obj, err := ReadObject(g, tag_sha1, git.ObjectTag)
     exc.Raiseif(err)
 
-    tag, err = tag_parse(String(tag_obj.Data()))
+    tag, err = tag_parse(mem.String(tag_obj.Data()))
     if err != nil {
         exc.Raise(&TagLoadError{tag_sha1, err})
     }
@@ -226,7 +227,7 @@ func xcommit_tree2(g *git.Repository, tree Sha1, parents []Sha1, msg string, aut
     commit += fmt.Sprintf("committer %s\n", &committer)
     commit += fmt.Sprintf("\n%s", msg)
 
-    sha1, err := WriteObject(g, Bytes(commit), git.ObjectCommit)
+    sha1, err := WriteObject(g, mem.Bytes(commit), git.ObjectCommit)
     exc.Raiseif(err)
 
     return sha1
