@@ -23,7 +23,7 @@ import (
     "testing"
 
     "lab.nexedi.com/kirr/go123/exc"
-    "lab.nexedi.com/kirr/go123/myname"
+    "lab.nexedi.com/kirr/go123/my"
     "lab.nexedi.com/kirr/go123/xruntime"
     "lab.nexedi.com/kirr/go123/xstrings"
 
@@ -56,17 +56,15 @@ func XSha1(s string) Sha1 {
 // verify end-to-end pull-restore
 func TestPullRestore(t *testing.T) {
     // if something raises -> don't let testing panic - report it as proper error with context.
-    here := myname.Func()
+    here := my.FuncName()
     defer exc.Catch(func(e *exc.Error) {
         e = exc.Addcallingcontext(here, e)
 
         // add file:line for failing code inside testing function - so we have exact context to debug
         failedat := ""
         for _, f := range xruntime.Traceback(1) {
-            if f.Name() == here {
-                // TODO(go1.7) -> f.File, f.Line  (f becomes runtime.Frame)
-                file, line := f.FileLine(f.Pc - 1)
-                failedat = fmt.Sprintf("%s:%d", filepath.Base(file), line)
+            if f.Function == here {
+                failedat = fmt.Sprintf("%s:%d", filepath.Base(f.File), f.Line)
                 break
             }
         }

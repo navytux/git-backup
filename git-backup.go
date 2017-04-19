@@ -77,7 +77,7 @@ import (
 
     "lab.nexedi.com/kirr/go123/exc"
     "lab.nexedi.com/kirr/go123/mem"
-    "lab.nexedi.com/kirr/go123/myname"
+    "lab.nexedi.com/kirr/go123/my"
     "lab.nexedi.com/kirr/go123/xerr"
     "lab.nexedi.com/kirr/go123/xflag"
     "lab.nexedi.com/kirr/go123/xstrings"
@@ -383,7 +383,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
         // prefix namespace and this way won't leave stale removed things)
         xgit("rm", "--cached", "-r", "--ignore-unmatch", "--", prefix)
 
-        here := myname.Func()
+        here := my.FuncName()
         err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) (errout error) {
             // any error -> stop
             if err != nil {
@@ -765,7 +765,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
         defer wg.Done()
         defer close(packxq)
         // raised err -> errch
-        here := myname.Func()
+        here := my.FuncName()
         defer exc.Catch(func(e *exc.Error) {
             errch <- exc.Addcallingcontext(here, e)
         })
@@ -847,7 +847,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
         go func() {
             defer wg.Done()
             // raised err -> errch
-            here := myname.Func()
+            here := my.FuncName()
             defer exc.Catch(func(e *exc.Error) {
                 errch <- exc.Addcallingcontext(here, e)
             })
@@ -981,7 +981,7 @@ func main() {
     }
 
     // catch Error and report info from it
-    here := myname.Func()
+    here := my.FuncName()
     defer exc.Catch(func(e *exc.Error) {
         e = exc.Addcallingcontext(here, e)
         fmt.Fprintln(os.Stderr, e)
