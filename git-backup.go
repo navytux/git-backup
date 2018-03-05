@@ -392,8 +392,13 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
         here := my.FuncName()
         err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) (errout error) {
-            // any error -> stop
             if err != nil {
+                if os.IsNotExist(err) {
+                    // a file or directory was removed in parallel to us scanning the tree.
+                    infof("Warning: Skipping %s: %s", path, err)
+                    return nil
+                }
+                // any other error -> stop
                 return err
             }
 
