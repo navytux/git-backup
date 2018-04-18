@@ -104,6 +104,7 @@ need_gitlab_config() {
 
 # pull gitlab data into git-backup repository
 backup_pull() {
+    keep_pulled_backup=$1
     need_gitlab_config
 
     # 1. dump all gitlab data except repositories & db
@@ -210,8 +211,13 @@ backup_pull() {
     echo " * git-backup pull everything"
     $GIT_BACKUP pull "$tmpd/gitlab_backup:gitlab/misc"  $GITLAB_REPOS_PATH:gitlab/repo
 
-    # mark backup_tar as pulled and cleanup
-    mv "$backup_tar" "$backup_tar.pulled"
+    if [ "$keep_pulled_backup" == "n" ]; then
+        # remove pulled as they are not needed
+        rm -f "$backup_tar"
+    else
+        # mark backup_tar as pulled and cleanup
+        mv "$backup_tar" "$backup_tar.pulled"
+    fi
     rm -rf "$tmpd"
 
     echo OK
@@ -387,7 +393,7 @@ umask 0077    # XXX maybe not good - e.g. git-data/repositories should (?) be rw
 
 
 usage() {
-    echo "Usage: gitlab-backup [pull | restore (-vupok, -go) <commit-ish>]"
+    echo "Usage: gitlab-backup [pull (-keep) | restore (-vupok, -go) <commit-ish>]"
 }
 
 
@@ -397,7 +403,23 @@ shift
 
 case "$action" in
     pull)
-        backup_pull
+        keep=n      # keep pulled gitlab backup data
+        while test $# != 0; do
+            case "$1" in
+            -keep)
+                keep=y
+                ;;
+            -*)
+                die `usage`
+                ;;
+            *)
+                break
+                ;;
+            esac
+            shift
+        done
+
+        backup_pull $keep
         ;;
     restore)
         vupok=n     # gitlab version >= backup's gitlab version is ok
