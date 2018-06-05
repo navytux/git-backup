@@ -64,7 +64,6 @@ NOTE the idea of pulling all refs together is similar to git-namespaces
 
     We do likewise if a ref points to tree or blob, which is valid in Git.
 */
-
 package main
 
 import (

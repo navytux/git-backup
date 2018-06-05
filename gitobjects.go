@@ -17,8 +17,8 @@
 // See COPYING file for full licensing terms.
 // See https://www.nexedi.com/licensing for rationale and options.
 
-// Git-backup | Git object: Blob Tree Commit Tag
 package main
+// Git-backup | Git object: Blob Tree Commit Tag
 
 import (
     "errors"

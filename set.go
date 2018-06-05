@@ -17,9 +17,9 @@
 // See COPYING file for full licensing terms.
 // See https://www.nexedi.com/licensing for rationale and options.
 
+package main
 // Git-backup | Set "template" type
 // TODO -> go:generate + template
-package main
 
 // Set<Sha1>
 type Sha1Set map[Sha1]struct{}

@@ -17,8 +17,8 @@
 // See COPYING file for full licensing terms.
 // See https://www.nexedi.com/licensing for rationale and options.
 
-// Git-backup | Sha1 type to work with SHA1 oids
 package main
+// Git-backup | Sha1 type to work with SHA1 oids
 
 import (
     "bytes"
