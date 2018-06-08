@@ -889,7 +889,12 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
                             "-c", "pack.threads=1", // occupy only 1 CPU + it packs better
                             "pack-objects",
                             "--revs", // include all objects referencable from input sha1 list
-                            "--reuse-object", "--reuse-delta", "--delta-base-offset"}
+                            "--reuse-object", "--reuse-delta", "--delta-base-offset",
+
+                            // use bitmap index from backup repo, if present (faster pack generation)
+                            // https://git.kernel.org/pub/scm/git/git.git/commit/?h=645c432d61
+                            "--use-bitmap-index",
+                    }
                     if verbose <= 0 {
                         pack_argv = append(pack_argv, "-q")
                     }
