@@ -184,20 +184,22 @@ func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
 // another, so that on backup restore we only have to recreate original tag
 // object and tagged object is kept there in repo thanks to it being reachable
 // through created commit.
-var tag_tree_blob = StrSet{"tag": {}, "tree": {}, "blob": {}}
-func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1 {
-    if !tag_tree_blob.Contains(obj_type) {
+func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type git.ObjectType) Sha1 {
+    switch obj_type {
+    case git.ObjectTag, git.ObjectTree, git.ObjectBlob:
+        // ok
+    default:
         exc.Raisef("%s (%s): cannot encode as commit", sha1, obj_type)
     }
 
     // first line in commit msg = object type
-    obj_encoded := obj_type + "\n"
-    var tagged_type string
+    obj_encoded := gittypestr(obj_type) + "\n"
+    var tagged_type git.ObjectType
     var tagged_sha1 Sha1
 
     // below the code layout is mainly for tag type, and we hook tree and blob
     // types handling into that layout
-    if obj_type == "tag" {
+    if obj_type == git.ObjectTag {
         tag, tag_obj := xload_tag(g, sha1)
         tagged_type = tag.tagged_type
         tagged_sha1 = tag.tagged_sha1
@@ -219,7 +221,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
     //  |                 .msg:      Tag
     //  v                 .tree   -> ø
     // Commit             .parent -> Commit
-    if tagged_type == "commit" {
+    if tagged_type == git.ObjectCommit {
         return zcommit_tree(mktree_empty(), []Sha1{tagged_sha1}, obj_encoded)
     }
 
@@ -227,7 +229,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
     //  |                 .msg:      Tag
     //  v                 .tree   -> Tree
     // Tree               .parent -> ø
-    if tagged_type == "tree" {
+    if tagged_type == git.ObjectTree {
         return zcommit_tree(tagged_sha1, []Sha1{}, obj_encoded)
     }
 
@@ -235,7 +237,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
     //  |                 .msg:      Tag
     //  v                 .tree   -> Tree* "tagged" -> Blob
     // Blob               .parent -> ø
-    if tagged_type == "blob" {
+    if tagged_type == git.ObjectBlob {
         tree_for_blob := xgitSha1("mktree", RunWith{stdin: fmt.Sprintf("100644 blob %s\ttagged\n", tagged_sha1)})
         return zcommit_tree(tree_for_blob, []Sha1{}, obj_encoded)
     }
@@ -244,7 +246,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type string) Sha1
     //  |                 .msg:      Tag₂
     //  v                 .tree   -> ø
     // Tag₁               .parent -> Commit₁*
-    if tagged_type == "tag" {
+    if tagged_type == git.ObjectTag {
         commit1 := obj_represent_as_commit(g, tagged_sha1, tagged_type)
         return zcommit_tree(mktree_empty(), []Sha1{commit1}, obj_encoded)
     }
@@ -274,7 +276,10 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) Sha1 {
     if err != nil {
         xraise("invalid encoded format")
     }
-    if !tag_tree_blob.Contains(obj_type) {
+    switch obj_type {
+    case "tag", "tree", "blob":
+        // ok
+    default:
         xraisef("unexpected encoded object type %q", obj_type)
     }
 
@@ -295,7 +300,7 @@ func obj_recreate_from_commit(g *git.Repository, commit_sha1 Sha1) Sha1 {
     if err != nil {
         xraisef("encoded tag: %s", err)
     }
-    if tag.tagged_type == "tag" {
+    if tag.tagged_type == git.ObjectTag {
         if commit.ParentCount() == 0 {
             xraise("encoded tag corrupt (tagged is tag but []parent is empty)")
         }
@@ -494,7 +499,11 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
             var seen bool
             sha1_, seen = noncommit_seen[sha1]
             if !seen {
-                sha1_ = obj_represent_as_commit(gb, sha1, type_)
+                obj_type, ok := gittype(type_)
+                if !ok {
+                    exc.Raisef("%s: invalid git type in entry %q", backup_refs_work, __)
+                }
+                sha1_ = obj_represent_as_commit(gb, sha1, obj_type)
                 noncommit_seen[sha1] = sha1_
             }
 

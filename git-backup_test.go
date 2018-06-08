@@ -60,6 +60,15 @@ func XSha1(s string) Sha1 {
     return sha1
 }
 
+func xgittype(s string) git.ObjectType {
+    type_, ok := gittype(s)
+    if !ok {
+        exc.Raisef("unknown git type %q", s)
+    }
+    return type_
+}
+
+
 // verify end-to-end pull-restore
 func TestPullRestore(t *testing.T) {
     // if something raises -> don't let testing panic - report it as proper error with context.
@@ -145,7 +154,7 @@ func TestPullRestore(t *testing.T) {
 
         // encoding original object should give sha1_
         obj_type := xgit("cat-file", "-t", nc.sha1)
-        sha1_ := obj_represent_as_commit(gb, nc.sha1, obj_type)
+        sha1_ := obj_represent_as_commit(gb, nc.sha1, xgittype(obj_type))
         if sha1_ != nc.sha1_ {
             t.Fatalf("encode %s -> %s ;  want %s", sha1, sha1_, nc.sha1_)
         }

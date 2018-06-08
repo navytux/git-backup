@@ -91,9 +91,8 @@ func (e *UnexpectedObjType) Error() string {
 }
 
 
-
 type Tag struct {
-    tagged_type string
+    tagged_type git.ObjectType
     tagged_sha1 Sha1
     // TODO msg
 }
@@ -127,9 +126,15 @@ func (e *TagLoadError) Error() string {
 
 func tag_parse(tag_raw string) (*Tag, error) {
     t := Tag{}
-    _, err := fmt.Sscanf(tag_raw, "object %s\ntype %s\n", &t.tagged_sha1, &t.tagged_type)
+    tagged_type := ""
+    _, err := fmt.Sscanf(tag_raw, "object %s\ntype %s\n", &t.tagged_sha1, &tagged_type)
     if err != nil {
         return nil, errors.New("invalid header")
+    }
+    var ok bool
+    t.tagged_type, ok = gittype(tagged_type)
+    if !ok {
+        return nil, fmt.Errorf("invalid tagged type %q", tagged_type)
     }
     return &t, nil
 }
@@ -243,4 +248,38 @@ func xcommit_tree2(g *git.Repository, tree Sha1, parents []Sha1, msg string, aut
 
 func xcommit_tree(g *git.Repository, tree Sha1, parents []Sha1, msg string) Sha1 {
     return xcommit_tree2(g, tree, parents, msg, AuthorInfo{}, AuthorInfo{})
+}
+
+
+// gittype converts string to git.ObjectType.
+//
+// Only valid concrete git types are converted successfully.
+func gittype(typ string) (git.ObjectType, bool) {
+    switch typ {
+    case "commit": return git.ObjectCommit, true
+    case "tree":   return git.ObjectTree, true
+    case "blob":   return git.ObjectBlob, true
+    case "tag":    return git.ObjectTag, true
+    }
+
+    return git.ObjectBad, false
+
+}
+
+// gittypestr converts git.ObjectType to string.
+//
+// We depend on this conversion being exact and matching how Git encodes it in
+// objects. git.ObjectType.String() is different (e.g. "Blob" instead of
+// "blob"), and can potentially change over time.
+//
+// gittypestr expects the type to be valid and concrete - else it panics.
+func gittypestr(typ git.ObjectType) string {
+    switch typ {
+    case git.ObjectCommit:  return "commit"
+    case git.ObjectTree:    return "tree"
+    case git.ObjectBlob:    return "blob"
+    case git.ObjectTag:     return "tag"
+    }
+
+    panic(fmt.Sprintf("git type %#v invalid", typ))
 }
