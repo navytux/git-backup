@@ -360,9 +360,9 @@ func cmd_pull(gb *git.Repository, argv []string) {
     cmd_pull_(gb, pullspecv)
 }
 
-// info about ref pointing to sha1
+// Ref is info about a reference pointing to sha1.
 type Ref struct {
-    ref  string
+    name string // reference name without "refs/" prefix
     sha1 Sha1
 }
 
@@ -538,8 +538,8 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
     // remove no-longer needed backup refs & verify they don't stay
     backup_refs_delete := ""
-    for _, __ := range backup_refs_list {
-        backup_refs_delete += fmt.Sprintf("delete %s %s\n", __.ref, __.sha1)
+    for _, ref := range backup_refs_list {
+        backup_refs_delete += fmt.Sprintf("delete %s %s\n", ref.name, ref.sha1)
     }
 
     xgit("update-ref", "--stdin", RunWith{stdin: backup_refs_delete})
@@ -652,9 +652,9 @@ type BackupRefSha1 struct {
                // (for tag/tree/blob - they are converted to commits)
 }
 
-// ref entry in 'backup.refs'   (repo prefix stripped)
+// BackupRef represents 1 reference entry in 'backup.refs'   (repo prefix stripped)
 type BackupRef struct {
-    refname string // ref without "refs/" prefix
+    name string   // reference name without "refs/" prefix
     BackupRefSha1
 }
 
@@ -681,7 +681,7 @@ type ByRefname []BackupRef
 
 func (br ByRefname) Len() int           { return len(br) }
 func (br ByRefname) Swap(i, j int)      { br[i], br[j] = br[j], br[i] }
-func (br ByRefname) Less(i, j int) bool { return strings.Compare(br[i].refname, br[j].refname) < 0 }
+func (br ByRefname) Less(i, j int) bool { return strings.Compare(br[i].name, br[j].name) < 0 }
 
 // all sha1 heads RefMap points to, in sorted order
 func (m RefMap) Sha1Heads() []Sha1 {
@@ -908,8 +908,8 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
                     repo_refs := p.refs.Values()
                     sort.Sort(ByRefname(repo_refs))
                     repo_ref_listv := make([]string, 0, len(repo_refs))
-                    for _, __ := range repo_refs {
-                        repo_ref_listv = append(repo_ref_listv, fmt.Sprintf("%s refs/%s", __.sha1, __.refname))
+                    for _, ref := range repo_refs {
+                        repo_ref_listv = append(repo_ref_listv, fmt.Sprintf("%s refs/%s", ref.sha1, ref.name))
                     }
                     repo_ref_list := strings.Join(repo_ref_listv, "\n")
                     if x_ref_list != repo_ref_list {
