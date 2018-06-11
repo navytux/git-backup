@@ -913,7 +913,9 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
                     }
                     repo_ref_list := strings.Join(repo_ref_listv, "\n")
                     if x_ref_list != repo_ref_list {
-                        exc.Raisef("E: extracted %s refs corrupt", p.repopath)
+                        // TODO show refs diff, not 2 dumps
+                        exc.Raisef("E: extracted %s refs corrupt:\n\nwant:\n%s\n\nhave:\n%s",
+                            p.repopath, repo_ref_list, x_ref_list)
                     }
 
                     // check connectivity in recreated repository.
