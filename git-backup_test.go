@@ -160,44 +160,63 @@ func TestPullRestore(t *testing.T) {
         }
     }
 
-    // verify no garbage is left under refs/backup/
-    dentryv, err := ioutil.ReadDir("refs/backup/")
-    if err != nil && !os.IsNotExist(err) {
-        t.Fatal(err)
-    }
-    if len(dentryv) != 0 {
-        namev := []string{}
-        for _, fi := range dentryv {
-            namev = append(namev, fi.Name())
+    // checks / cleanups after cmd_pull
+    afterPull := func() {
+        // verify no garbage is left under refs/backup/
+        dentryv, err := ioutil.ReadDir("refs/backup/")
+        if err != nil && !os.IsNotExist(err) {
+            t.Fatal(err)
         }
-        t.Fatalf("refs/backup/ not empty after pull: %v", namev)
-    }
-
-    // prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
-    xgit("prune")
-
-    // verify backup repo is all ok
-    xgit("fsck")
-
-    // verify that just pulled tag objects are now gone after pruning -
-    // - they become not directly git-present. The only possibility to
-    // get them back is via recreating from encoded commit objects.
-    for _, nc := range noncommitv {
-        if !nc.istag {
-            continue
+        if len(dentryv) != 0 {
+            namev := []string{}
+            for _, fi := range dentryv {
+                namev = append(namev, fi.Name())
+            }
+            t.Fatalf("refs/backup/ not empty after pull: %v", namev)
         }
-        gerr, _, _ := ggit("cat-file", "-p", nc.sha1)
-        if gerr == nil {
-            t.Fatalf("tag %s still present in backup.git after git-prune", nc.sha1)
+
+        // prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
+        xgit("prune")
+
+        // verify backup repo is all ok
+        xgit("fsck")
+
+        // verify that just pulled tag objects are now gone after pruning -
+        // - they become not directly git-present. The only possibility to
+        // get them back is via recreating from encoded commit objects.
+        for _, nc := range noncommitv {
+            if !nc.istag {
+                continue
+            }
+            gerr, _, _ := ggit("cat-file", "-p", nc.sha1)
+            if gerr == nil {
+                t.Fatalf("tag %s still present in backup.git after git-prune", nc.sha1)
+            }
+        }
+
+        // reopen backup repository - to avoid having stale cache with present
+        // objects we deleted above with `git prune`
+        gb, err = git.OpenRepository(".")
+        if err != nil {
+            t.Fatal(err)
         }
     }
 
-    // reopen backup repository - to avoid having stale cache with present
-    // objects we deleted above with `git prune`
-    gb, err = git.OpenRepository(".")
-    if err != nil {
-        t.Fatal(err)
+    afterPull()
+
+    // pull again - it should be noop
+    h1 := xgitSha1("rev-parse", "HEAD")
+    cmd_pull(gb, []string{my1+":b1"})
+    afterPull()
+    h2 := xgitSha1("rev-parse", "HEAD")
+    if h1 == h2 {
+        t.Fatal("pull: second run did not ajusted HEAD")
     }
+    δ12 := xgit("diff", h1, h2)
+    if δ12 != "" {
+        t.Fatalf("pull: second run was not noop: δ:\n%s", δ12)
+    }
+
 
     // restore backup
     work1 := workdir + "/1"

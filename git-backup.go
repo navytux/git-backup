@@ -377,12 +377,67 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     xgit("update-ref", backup_lock, mktree_empty(), Sha1{})
 
     // make sure there is root commit
-    gerr, _, _ := ggit("rev-parse", "--verify", "HEAD")
+    var HEAD Sha1
+    var err  error
+    gerr, __, _ := ggit("rev-parse", "--verify", "HEAD")
     if gerr != nil {
         infof("# creating root commit")
         // NOTE `git commit` does not work in bare repo - do commit by hand
-        commit := xcommit_tree(gb, mktree_empty(), []Sha1{}, "Initialize git-backup repository")
-        xgit("update-ref", "-m", "git-backup pull init", "HEAD", commit)
+        HEAD = xcommit_tree(gb, mktree_empty(), []Sha1{}, "Initialize git-backup repository")
+        xgit("update-ref", "-m", "git-backup pull init", "HEAD", HEAD)
+    } else {
+        HEAD, err = Sha1Parse(__)
+        exc.Raiseif(err)
+    }
+
+    // build index of "already-have" objects: all commits + tag/tree/blob that
+    // were at heads of already pulled repositories.
+    //
+    // Build it once and use below to check ourselves whether a head from a pulled
+    // repository needs to be actually fetched. If we don't, `git fetch-pack`
+    // will do similar to "all commits" linear scan for every pulled repository,
+    // which are many out there.
+    alreadyHave := Sha1Set{}
+    infof("# building \"already-have\" index")
+
+    // already have: all commits
+    //
+    // As of lab.nexedi.com/20180612 there are ~ 1.7·10⁷ objects total in backup.
+    // Of those there are ~ 1.9·10⁶ commit objects, i.e. ~10% of total.
+    // Since 1 sha1 is 2·10¹ bytes, the space needed for keeping sha1 of all
+    // commits is ~ 4·10⁷B = ~40MB. It is thus ok to keep this index in RAM for now.
+    for _, __ := range xstrings.SplitLines(xgit("rev-list", HEAD), "\n") {
+        sha1, err := Sha1Parse(__)
+        exc.Raiseif(err)
+        alreadyHave.Add(sha1)
+    }
+
+    // already have: tag/tree/blob that were at heads of already pulled repositories
+    //
+    // As of lab.nexedi.com/20180612 there are ~ 8.4·10⁴ refs in total.
+    // Of those encoded tag/tree/blob are ~ 3.2·10⁴, i.e. ~40% of total.
+    // The number of tag/tree/blob objects in alreadyHave is thus negligible
+    // compared to the number of "all commits".
+    hcommit, err := gb.LookupCommit(HEAD.AsOid())
+    exc.Raiseif(err)
+    htree, err := hcommit.Tree()
+    exc.Raiseif(err)
+    if htree.EntryByName("backup.refs") != nil {
+        repotab, err := loadBackupRefs(fmt.Sprintf("%s:backup.refs", HEAD))
+        exc.Raiseif(err)
+
+        for _, repo := range repotab {
+            for _, xref := range repo.refs {
+                if xref.sha1 != xref.sha1_ && !alreadyHave.Contains(xref.sha1) {
+                    // make sure encoded tag/tree/blob objects represented as
+                    // commits are present. We do so, because we promise to
+                    // fetch that all objects in alreadyHave are present.
+                    obj_recreate_from_commit(gb, xref.sha1_)
+
+                    alreadyHave.Add(xref.sha1)
+                }
+            }
+        }
     }
 
     // walk over specified dirs, pulling objects from git and blobbing non-git-object files
@@ -435,7 +490,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
             // git repo - let's pull all refs from it to our backup refs namespace
             infof("# git  %s\t<- %s", prefix, path)
-            refv, err := fetch(path)
+            refv, _, err := fetch(path, alreadyHave)
             exc.Raiseif(err)
 
             reporefprefix := backup_refs_work +
@@ -531,8 +586,6 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
     // index is ready - prepare tree and commit
     backup_tree_sha1 := xgitSha1("write-tree")
-
-    HEAD := xgitSha1("rev-parse", "HEAD")
     commit_sha1 := xcommit_tree(gb, backup_tree_sha1, append([]Sha1{HEAD}, backup_refs_parentv...),
             "Git-backup " + backup_time)
 
@@ -545,7 +598,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     }
 
     xgit("update-ref", "--stdin", RunWith{stdin: backup_refs_delete})
-    __ := xgit("for-each-ref", backup_refs_work)
+    __ = xgit("for-each-ref", backup_refs_work)
     if __ != "" {
         exc.Raisef("Backup refs under %s not deleted properly", backup_refs_work)
     }
@@ -566,7 +619,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     //       We can avoid quadratic behaviour via removing refs from just
     //       pulled repo right after the pull.
     gitdir := xgit("rev-parse", "--git-dir")
-    err := os.RemoveAll(gitdir+"/"+backup_refs_work)
+    err = os.RemoveAll(gitdir+"/"+backup_refs_work)
     exc.Raiseif(err) // NOTE err is nil if path does not exist
 
     // if we have working copy - update it
@@ -595,25 +648,45 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 // repository in question. The objects considered to fetch are those, that are
 // reachable from all repository references.
 //
-// Returned is list of all references in source repository.
+// AlreadyHave can be given to indicate knowledge on what objects our repository
+// already has. If remote advertises tip with sha1 in alreadyHave, that tip won't be
+// fetched. Notice: alreadyHave is consulted directly - no reachability scan is
+// performed on it.
+//
+// All objects reachable from alreadyHave must be in our repository.
+// AlreadyHave does not need to be complete - if we have something that is not
+// in alreadyHave - it can affect only speed, not correctness.
+//
+// Returned are 2 lists of references from the source repository:
+//
+//  - list of all references, and
+//  - list of references we actually had to fetch.
 //
 // Note: fetch does not create any local references - the references returned
 // only describe state of references in fetched source repository.
-func fetch(repo string) (refv []Ref, err error) {
+func fetch(repo string, alreadyHave Sha1Set) (refv, fetchedv []Ref, err error) {
     defer xerr.Contextf(&err, "fetch %s", repo)
 
     // first check which references are advertised
     refv, err = lsremote(repo)
     if err != nil {
-        return nil, err
+        return nil, nil, err
+    }
+
+    // check if we already have something
+    var fetchv []Ref // references we need to actually fetch.
+    for _, ref := range refv {
+        if !alreadyHave.Contains(ref.sha1) {
+            fetchv = append(fetchv, ref)
+        }
     }
 
     // if there is nothing to fetch - we are done
-    if len(refv) == 0 {
-        return refv, nil
+    if len(fetchv) == 0 {
+        return refv, fetchv, nil
     }
 
-    // fetch all those advertised objects by sha1.
+    // fetch by sha1 what we don't already have from advertised.
     //
     // even if refs would change after ls-remote but before here, we should be
     // getting exactly what was advertised.
@@ -636,14 +709,14 @@ func fetch(repo string) (refv []Ref, err error) {
         " upload-pack",
 
         repo)
-    for _, ref := range refv {
+    for _, ref := range fetchv {
         arg(ref.sha1)
     }
     arg(RunWith{stderr: gitprogress()})
 
     gerr, _, _ := ggit(argv...)
     if gerr != nil {
-        return nil, gerr
+        return nil, nil, gerr
     }
 
     // fetch-pack ran ok - now check that all fetched tips are indeed fully
@@ -660,18 +733,18 @@ func fetch(repo string) (refv []Ref, err error) {
     // https://git.kernel.org/pub/scm/git/git.git/commit/?h=6d4bb3833c
     argv = nil
     arg("rev-list", "--quiet", "--objects", "--not", "--all", "--not")
-    for _, ref := range refv {
+    for _, ref := range fetchv {
         arg(ref.sha1)
     }
     arg(RunWith{stderr: gitprogress()})
 
     gerr, _, _ = ggit(argv...)
     if gerr != nil {
-        return nil, fmt.Errorf("remote did not send all neccessary objects")
+        return nil, nil, fmt.Errorf("remote did not send all neccessary objects")
     }
 
     // fetched ok
-    return refv, nil
+    return refv, fetchv, nil
 }
 
 // lsremote lists all references advertised by repo.
