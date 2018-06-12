@@ -1,0 +1,8 @@
+#!/bin/sh -e
+# hook for `git pack-objects` to force it to omit 1 blob from this repository.
+
+echo "I: x-missing-blob/hook-pack-object is running ..." >&2
+
+# tell real `git pack-objects` to omit blobs larger then 20 bytes.
+# this should keep hello.txt (12 bytes), but filter-out will-not-be-sent.txt (25 bytes).
+exec "$@" --filter=blob:limit=20

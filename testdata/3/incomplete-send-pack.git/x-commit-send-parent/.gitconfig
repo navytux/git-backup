@@ -1,0 +1,2 @@
+[uploadpack]
+	packObjectsHook = ./x-commit-send-parent/hook-pack-objects

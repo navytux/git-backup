@@ -272,10 +272,69 @@ func TestPullRestore(t *testing.T) {
     func() {
         defer exc.Catch(func(e *exc.Error) {
             // it ok - pull should raise
+
+            // git-backup leaves backup repo locked on error
+            xgit("update-ref", "-d", "refs/backup.locked")
         })
+
         cmd_pull(gb, []string{my2+":b2"})
-        t.Fatal("fetching from corrupt.git did not complain")
+        t.Fatal("pull corrupt.git: did not complain")
     }()
+
+    // now try to pull repo where `git pack-objects` misbehaves
+    my3 := mydir + "/testdata/3"
+    checkIncompletePack := func(kind, errExpect string) {
+        defer exc.Catch(func(e *exc.Error) {
+            estr := e.Error()
+            bad  := ""
+            badf := func(format string, argv ...interface{}) {
+                bad += fmt.Sprintf(format+"\n", argv...)
+            }
+
+            if !strings.Contains(estr, errExpect) {
+                badf("- no %q", errExpect)
+            }
+
+            if bad != "" {
+                t.Fatalf("pull incomplete-send-pack.git/%s: complained, but error is wrong:\n%s\nerror: %s", kind, bad, estr)
+            }
+
+            // git-backup leaves backup repo locked on error
+            xgit("update-ref", "-d", "refs/backup.locked")
+        })
+
+        // for incomplete-send-pack.git to indeed send incomplete pack, its git
+        // config has to be activated via tweaked $HOME.
+        home, ok := os.LookupEnv("HOME")
+        defer func() {
+            if ok {
+                err = os.Setenv("HOME", home)
+            } else {
+                err = os.Unsetenv("HOME")
+            }
+            exc.Raiseif(err)
+        }()
+        err = os.Setenv("HOME", my3+"/incomplete-send-pack.git/"+kind)
+        exc.Raiseif(err)
+
+        cmd_pull(gb, []string{my3+":b3"})
+        t.Fatalf("pull incomplete-send-pack.git/%s: did not complain", kind)
+    }
+
+    // missing blob: should be caught by git itself, because unpack-objects
+    // performs full reachability checks of fetched tips.
+    checkIncompletePack("x-missing-blob", "fatal: unpack-objects")
+
+    // missing commit: remote sends a pack that is closed under reachability,
+    // but it has objects starting from only parent of requested tip. This way
+    // e.g. commit at tip itself is not sent and the fact that it is missing in
+    // the pack is not caught by fetch-pack. git-backup has to detect the
+    // problem itself.
+    checkIncompletePack("x-commit-send-parent", "remote did not send all neccessary objects")
+
+    // pulling incomplete-send-pack.git without pack-objects hook must succeed:
+    // without $HOME tweaks full and complete pack is sent.
+    cmd_pull(gb, []string{my3+":b3"})
 }
 
 func TestRepoRefSplit(t *testing.T) {

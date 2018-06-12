@@ -1,0 +1,16 @@
+#!/bin/sh -e
+# hook for `git pack-objects` to force it to send refs starting from parent of requested commit.
+
+echo "I: x-commit-send-parent/hook-pack-object is running ..." >&2
+
+# filter to real `git pack-objects` input sha1 stream to be sha1~.
+while read oid ; do
+	case "$oid" in
+	--*|"")
+		echo "$oid"		# e.g. "--not" or empty line  - leave as is
+		;;
+	*)
+		git rev-parse $oid~	# oid -> oid~
+		;;
+	esac
+done | "$@"

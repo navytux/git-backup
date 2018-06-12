@@ -435,15 +435,17 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
             // git repo - let's pull all refs from it to our backup refs namespace
             infof("# git  %s\t<- %s", prefix, path)
-            // NOTE --no-tags : do not try to autoextend commit -> covering tag
-            // NOTE fetch.fsckObjects=true : check objects for corruption as they are fetched
-            xgit("-c", "fetch.fsckObjects=true",
-                 "fetch", "--no-tags", path,
-                  fmt.Sprintf("refs/*:%s%s/*", backup_refs_work,
-                        // NOTE repo name is escaped as it can contain e.g. spaces, and refs must not
-                        path_refescape(reprefix(dir, prefix, path))),
-                        // TODO do not show which ref we pulled - show only pack transfer progress
-                        RunWith{stderr: gitprogress()})
+            refv, err := fetch(path)
+            exc.Raiseif(err)
+
+            reporefprefix := backup_refs_work +
+                // NOTE repo name is escaped as it can contain e.g. spaces, and refs must not
+                path_refescape(reprefix(dir, prefix, path))
+            for _, ref := range refv {
+                err = mkref(gb, reporefprefix + "/" + ref.name, ref.sha1)
+                exc.Raiseif(err)
+            }
+
 
             // XXX do we want to do full fsck of source git repo on pull as well ?
 
@@ -585,6 +587,132 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
     // we are done - unlock
     xgit("update-ref", "-d", backup_lock)
+}
+
+// fetch makes sure all objects from a repository are present in backup place.
+//
+// It fetches objects that are potentially missing in backup from the
+// repository in question. The objects considered to fetch are those, that are
+// reachable from all repository references.
+//
+// Returned is list of all references in source repository.
+//
+// Note: fetch does not create any local references - the references returned
+// only describe state of references in fetched source repository.
+func fetch(repo string) (refv []Ref, err error) {
+    defer xerr.Contextf(&err, "fetch %s", repo)
+
+    // first check which references are advertised
+    refv, err = lsremote(repo)
+    if err != nil {
+        return nil, err
+    }
+
+    // if there is nothing to fetch - we are done
+    if len(refv) == 0 {
+        return refv, nil
+    }
+
+    // fetch all those advertised objects by sha1.
+    //
+    // even if refs would change after ls-remote but before here, we should be
+    // getting exactly what was advertised.
+    //
+    // related link on the subject:
+    // https://git.kernel.org/pub/scm/git/git.git/commit/?h=051e4005a3
+    var argv []interface{}
+    arg := func(v ...interface{}) { argv = append(argv, v...) }
+    arg(
+        // check objects for corruption as they are fetched
+        "-c", "fetch.fsckObjects=true",
+        "fetch-pack", "--thin",
+
+        // force upload-pack to allow us asking any sha1 we want.
+        // needed because advertised refs we got at lsremote time could have changed.
+        "--upload-pack=git -c uploadpack.allowAnySHA1InWant=true" +
+        // workarounds for git < 2.11.1, which does not have uploadpack.allowAnySHA1InWant:
+        " -c uploadpack.allowTipSHA1InWant=true -c uploadpack.allowReachableSHA1InWant=true" +
+        //
+        " upload-pack",
+
+        repo)
+    for _, ref := range refv {
+        arg(ref.sha1)
+    }
+    arg(RunWith{stderr: gitprogress()})
+
+    gerr, _, _ := ggit(argv...)
+    if gerr != nil {
+        return nil, gerr
+    }
+
+    // fetch-pack ran ok - now check that all fetched tips are indeed fully
+    // connected and that we also have all referenced blob/tree objects. The
+    // reason for this check is that source repository could send us a pack with
+    // e.g. some objects missing and this way even if fetch-pack would report
+    // success, chances could be we won't have all the objects we think we
+    // fetched.
+    //
+    // when checking we assume that the roots we already have at all our
+    // references are ok.
+    //
+    // related link on the subject:
+    // https://git.kernel.org/pub/scm/git/git.git/commit/?h=6d4bb3833c
+    argv = nil
+    arg("rev-list", "--quiet", "--objects", "--not", "--all", "--not")
+    for _, ref := range refv {
+        arg(ref.sha1)
+    }
+    arg(RunWith{stderr: gitprogress()})
+
+    gerr, _, _ = ggit(argv...)
+    if gerr != nil {
+        return nil, fmt.Errorf("remote did not send all neccessary objects")
+    }
+
+    // fetched ok
+    return refv, nil
+}
+
+// lsremote lists all references advertised by repo.
+func lsremote(repo string) (refv []Ref, err error) {
+    defer xerr.Contextf(&err, "lsremote %s", repo)
+
+    // NOTE --refs instructs to omit peeled refs like
+    //
+    //   c668db59ccc59e97ce81f769d9f4633e27ad3bdb refs/tags/v0.1
+    //   4b6821f4a4e4c9648941120ccbab03982e33104f refs/tags/v0.1^{}  <--
+    //
+    // because fetch-pack errors on them:
+    //
+    //   https://public-inbox.org/git/20180610143231.7131-1-kirr@nexedi.com/
+    //
+    // we don't need to pull them anyway.
+    gerr, stdout, _ := ggit("ls-remote", "--refs", repo)
+    if gerr != nil {
+        return nil, gerr
+    }
+
+    //  oid refname
+    //  oid refname
+    //  ...
+    for _, entry := range xstrings.SplitLines(stdout, "\n") {
+        sha1, ref := Sha1{}, ""
+        _, err := fmt.Sscanf(entry, "%s %s\n", &sha1, &ref)
+        if err != nil {
+            return nil, fmt.Errorf("strange output entry: %q", entry)
+        }
+
+        // Ref says its name goes without "refs/" prefix.
+        if !strings.HasPrefix(ref, "refs/") {
+            return nil, fmt.Errorf("non-refs/ reference: %q", ref)
+        }
+        ref = strings.TrimPrefix(ref, "refs/")
+
+        refv = append(refv, Ref{ref, sha1})
+    }
+
+    return refv, nil
 }
 
 // -------- git-backup restore --------

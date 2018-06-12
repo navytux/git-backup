@@ -221,6 +221,14 @@ func getDefaultIdent(g *git.Repository) AuthorInfo {
     return ident
 }
 
+// mkref creates a git reference.
+//
+// it is an error if the reference already exists.
+func mkref(g *git.Repository, name string, sha1 Sha1) error {
+    _, err := g.References.Create(name, sha1.AsOid(), false, "")
+    return err
+}
+
 // `git commit-tree` -> commit_sha1,   raise on error
 func xcommit_tree2(g *git.Repository, tree Sha1, parents []Sha1, msg string, author AuthorInfo, committer AuthorInfo) Sha1 {
     ident := getDefaultIdent(g)

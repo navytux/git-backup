@@ -1,0 +1,2 @@
+[uploadpack]
+	packObjectsHook = ./x-missing-blob/hook-pack-objects

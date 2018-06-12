@@ -1,1 +1,3 @@
-Unnamed repository; edit this file 'description' to name the repository.
+This repository contains object with corrupt data.
+
+See objects/corruptit.py for details.

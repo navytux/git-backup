@@ -1,0 +1,20 @@
+This repository is not corrupt. However it can be configured to force `git
+pack-objects` to send valid, but incomplete pack(*). This is needed to test that
+a fetcher really verifies whether it got complete pack after fetching from a
+repository.
+
+There are 2 scenarios to prepare incomplete pack:
+
+1. x-missing-blob: drop a blob object from the pack,
+2. x-commit-send-parent: generate a pack starting from only a parent of requested tip.
+
+To activate a scenario one have to export HOME=<this-repository>/<scenario>
+
+See x-missing-blob/ and x-commit-send-parent/ for details.
+See also https://git.kernel.org/pub/scm/git/git.git/commit/?h=6d4bb3833c for related check in `git fetch`.
+
+
+----
+
+(*) git pack-objects is adjusted at runtime via uploadpack.packObjectsHook:
+    https://git.kernel.org/pub/scm/git/git.git/commit/?h=20b20a22f8.
