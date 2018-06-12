@@ -493,6 +493,24 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
             refv, _, err := fetch(path, alreadyHave)
             exc.Raiseif(err)
 
+            // TODO don't store to git references all references from fetched repository:
+            //
+            //      We need to store to git references only references that were actually
+            //      fetched - so that next fetch, e.g. from a fork that also has new data
+            //      as its upstream, won't have to transfer what we just have fetched
+            //      from upstream.
+            //
+            //      For this purpose we can also save references by naming them as their
+            //      sha1, not actual name, which will automatically deduplicate them in
+            //      between several repositories, especially when/if pull will be made to
+            //      work in parallel.
+            //
+            //      Such changed-only deduplicated references should be O(δ) - usually only
+            //      a few, and this way we will also automatically avoid O(n^2) behaviour
+            //      of every git fetch scanning all local references at its startup.
+            //
+            //      For backup.refs, we can generate it directly from refv of all fetched
+            //      repositories saved in RAM.
             reporefprefix := backup_refs_work +
                 // NOTE repo name is escaped as it can contain e.g. spaces, and refs must not
                 path_refescape(reprefix(dir, prefix, path))
@@ -616,8 +634,8 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
     // TODO  Revisit this when reworking fetch to be parallel. Reason is: in
     //       the process of pulling repositories, the more references we
     //       accumulate, the longer pull starts to be, so it becomes O(n^2).
-    //       We can avoid quadratic behaviour via removing refs from just
-    //       pulled repo right after the pull.
+    //
+    //       -> what to do is described nearby fetch/mkref call.
     gitdir := xgit("rev-parse", "--git-dir")
     err = os.RemoveAll(gitdir+"/"+backup_refs_work)
     exc.Raiseif(err) // NOTE err is nil if path does not exist
