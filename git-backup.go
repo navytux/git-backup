@@ -858,37 +858,8 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
     HEAD := xgitSha1("rev-parse", "--verify", HEAD_)
 
     // read backup refs index
-    repotab := map[string]*BackupRepo{} // repo.path -> repo
-    backup_refs := xgit("cat-file", "blob", fmt.Sprintf("%s:backup.refs", HEAD))
-    for _, refentry := range xstrings.SplitLines(backup_refs, "\n") {
-        // sha1 prefix+refname (sha1_)
-        badentry := func() { exc.Raisef("E: invalid backup.refs entry: %q", refentry) }
-        refentryv := strings.Fields(refentry)
-        if !(2 <= len(refentryv) && len(refentryv) <= 3) {
-            badentry()
-        }
-        sha1, err := Sha1Parse(refentryv[0])
-        sha1_, err_ := sha1, err
-        if len(refentryv) == 3 {
-            sha1_, err_ = Sha1Parse(refentryv[2])
-        }
-        if err != nil || err_ != nil {
-            badentry()
-        }
-        reporef := refentryv[1]
-        repopath, ref := reporef_split(reporef)
-
-        repo := repotab[repopath]
-        if repo == nil {
-            repo = &BackupRepo{repopath, RefMap{}}
-            repotab[repopath] = repo
-        }
-
-        if _, alreadyin := repo.refs[ref]; alreadyin {
-            exc.Raisef("E: duplicate ref %s in backup.refs", reporef)
-        }
-        repo.refs[ref] = BackupRefSha1{sha1, sha1_}
-    }
+    repotab, err := loadBackupRefs(fmt.Sprintf("%s:backup.refs", HEAD))
+    exc.Raiseif(err)
 
     // flattened & sorted repotab
     // NOTE sorted - to process repos always in the same order & for searching
@@ -1091,6 +1062,51 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
     if len(ev) != 0 {
         exc.Raise(ev)
     }
+}
+
+// loadBackupRefs loads 'backup.ref' content from a git object.
+//
+// an example of object is e.g. "HEAD:backup.ref".
+func loadBackupRefs(object string) (repotab map[string]*BackupRepo, err error) {
+    defer xerr.Contextf(&err, "load backup.refs %q", object)
+
+    gerr, backup_refs, _ := ggit("cat-file", "blob", object)
+    if gerr != nil {
+        return nil, gerr
+    }
+
+    repotab = make(map[string]*BackupRepo)
+    for _, refentry := range xstrings.SplitLines(backup_refs, "\n") {
+        // sha1 prefix+refname (sha1_)
+        badentry := func() error { return fmt.Errorf("invalid entry: %q", refentry) }
+        refentryv := strings.Fields(refentry)
+        if !(2 <= len(refentryv) && len(refentryv) <= 3) {
+            return nil, badentry()
+        }
+        sha1, err := Sha1Parse(refentryv[0])
+        sha1_, err_ := sha1, err
+        if len(refentryv) == 3 {
+            sha1_, err_ = Sha1Parse(refentryv[2])
+        }
+        if err != nil || err_ != nil {
+            return nil, badentry()
+        }
+        reporef := refentryv[1]
+        repopath, ref := reporef_split(reporef)
+
+        repo := repotab[repopath]
+        if repo == nil {
+            repo = &BackupRepo{repopath, RefMap{}}
+            repotab[repopath] = repo
+        }
+
+        if _, alreadyin := repo.refs[ref]; alreadyin {
+            return nil, fmt.Errorf("duplicate ref %q", ref)
+        }
+        repo.refs[ref] = BackupRefSha1{sha1, sha1_}
+    }
+
+    return repotab, nil
 }
 
 var commands = map[string]func(*git.Repository, []string){
