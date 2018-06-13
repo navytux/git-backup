@@ -20,355 +20,355 @@
 package main
 
 import (
-    "fmt"
-    "io/ioutil"
-    "os"
-    "path/filepath"
-    "regexp"
-    "strings"
-    "syscall"
-    "testing"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
+	"testing"
 
-    "lab.nexedi.com/kirr/go123/exc"
-    "lab.nexedi.com/kirr/go123/my"
-    "lab.nexedi.com/kirr/go123/xruntime"
-    "lab.nexedi.com/kirr/go123/xstrings"
+	"lab.nexedi.com/kirr/go123/exc"
+	"lab.nexedi.com/kirr/go123/my"
+	"lab.nexedi.com/kirr/go123/xruntime"
+	"lab.nexedi.com/kirr/go123/xstrings"
 
-    git "github.com/libgit2/git2go"
+	git "github.com/libgit2/git2go"
 )
 
 func xgetcwd(t *testing.T) string {
-    cwd, err := os.Getwd()
-    if err != nil {
-        t.Fatal(err)
-    }
-    return cwd
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cwd
 }
 
 func xchdir(t *testing.T, dir string) {
-    err := os.Chdir(dir)
-    if err != nil {
-        t.Fatal(err)
-    }
+	err := os.Chdir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func XSha1(s string) Sha1 {
-    sha1, err := Sha1Parse(s)
-    if err != nil {
-        panic(err)
-    }
-    return sha1
+	sha1, err := Sha1Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return sha1
 }
 
 func xgittype(s string) git.ObjectType {
-    type_, ok := gittype(s)
-    if !ok {
-        exc.Raisef("unknown git type %q", s)
-    }
-    return type_
+	type_, ok := gittype(s)
+	if !ok {
+		exc.Raisef("unknown git type %q", s)
+	}
+	return type_
 }
 
 
 // verify end-to-end pull-restore
 func TestPullRestore(t *testing.T) {
-    // if something raises -> don't let testing panic - report it as proper error with context.
-    here := my.FuncName()
-    defer exc.Catch(func(e *exc.Error) {
-        e = exc.Addcallingcontext(here, e)
+	// if something raises -> don't let testing panic - report it as proper error with context.
+	here := my.FuncName()
+	defer exc.Catch(func(e *exc.Error) {
+		e = exc.Addcallingcontext(here, e)
 
-        // add file:line for failing code inside testing function - so we have exact context to debug
-        failedat := ""
-        for _, f := range xruntime.Traceback(1) {
-            if f.Function == here {
-                failedat = fmt.Sprintf("%s:%d", filepath.Base(f.File), f.Line)
-                break
-            }
-        }
-        if failedat == "" {
-            panic(fmt.Errorf("cannot lookup failedat for %s", here))
-        }
+		// add file:line for failing code inside testing function - so we have exact context to debug
+		failedat := ""
+		for _, f := range xruntime.Traceback(1) {
+			if f.Function == here {
+				failedat = fmt.Sprintf("%s:%d", filepath.Base(f.File), f.Line)
+				break
+			}
+		}
+		if failedat == "" {
+			panic(fmt.Errorf("cannot lookup failedat for %s", here))
+		}
 
-        t.Errorf("%s: %v", failedat, e)
-    })
+		t.Errorf("%s: %v", failedat, e)
+	})
 
-    workdir, err := ioutil.TempDir("", "t-git-backup")
-    if err != nil {
-        t.Fatal(err)
-    }
-    defer os.RemoveAll(workdir)
+	workdir, err := ioutil.TempDir("", "t-git-backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workdir)
 
-    mydir := xgetcwd(t)
-    xchdir(t, workdir)
-    defer xchdir(t, mydir)
+	mydir := xgetcwd(t)
+	xchdir(t, workdir)
+	defer xchdir(t, mydir)
 
-    // -test.v -> verbosity of git-backup
-    if testing.Verbose() {
-        verbose = 1
-    } else {
-        verbose = 0
-    }
+	// -test.v -> verbosity of git-backup
+	if testing.Verbose() {
+		verbose = 1
+	} else {
+		verbose = 0
+	}
 
-    // init backup repository
-    xgit("init", "--bare", "backup.git")
-    xchdir(t, "backup.git")
-    gb, err := git.OpenRepository(".")
-    if err != nil {
-        t.Fatal(err)
-    }
+	// init backup repository
+	xgit("init", "--bare", "backup.git")
+	xchdir(t, "backup.git")
+	gb, err := git.OpenRepository(".")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-    // pull from testdata
-    my0 := mydir + "/testdata/0"
-    cmd_pull(gb, []string{my0+":b0"}) // only empty repo in testdata/0
+	// pull from testdata
+	my0 := mydir + "/testdata/0"
+	cmd_pull(gb, []string{my0 + ":b0"}) // only empty repo in testdata/0
 
-    my1 := mydir + "/testdata/1"
-    cmd_pull(gb, []string{my1+":b1"})
+	my1 := mydir + "/testdata/1"
+	cmd_pull(gb, []string{my1 + ":b1"})
 
-    // verify tag/tree/blob encoding is 1) consistent and 2) always the same.
-    // we need it be always the same so different git-backup versions can
-    // interoperate with each other.
-    var noncommitv = []struct{
-        sha1  Sha1 // original
-        sha1_ Sha1 // encoded
-        istag bool // is original object a tag object
-    }{
-        {XSha1("f735011c9fcece41219729a33f7876cd8791f659"), XSha1("4f2486e99ff9744751e0756b155e57bb24c453dd"), true},  // tag-to-commit
-        {XSha1("7124713e403925bc772cd252b0dec099f3ced9c5"), XSha1("6b3beabee3e0704fa3269558deab01e9d5d7764e"), true},  // tag-to-tag
-        {XSha1("11e67095628aa17b03436850e690faea3006c25d"), XSha1("89ad5fbeb9d3f0c7bc6366855a09484819289911"), true},  // tag-to-blob
-        {XSha1("ba899e5639273a6fa4d50d684af8db1ae070351e"), XSha1("68ad6a7c31042e53201e47aee6096ed081b6fdb9"), true},  // tag-to-tree
-        {XSha1("61882eb85774ed4401681d800bb9c638031375e2"), XSha1("761f55bcdf119ced3fcf23b69fdc169cbb5fc143"), false}, // ref-to-tree
-        {XSha1("7a3343f584218e973165d943d7c0af47a52ca477"), XSha1("366f3598d662909e2537481852e42b775c7eb837"), false}, // ref-to-blob
-    }
+	// verify tag/tree/blob encoding is 1) consistent and 2) always the same.
+	// we need it be always the same so different git-backup versions can
+	// interoperate with each other.
+	var noncommitv = []struct {
+		sha1  Sha1 // original
+		sha1_ Sha1 // encoded
+		istag bool // is original object a tag object
+	}{
+		{XSha1("f735011c9fcece41219729a33f7876cd8791f659"), XSha1("4f2486e99ff9744751e0756b155e57bb24c453dd"), true},  // tag-to-commit
+		{XSha1("7124713e403925bc772cd252b0dec099f3ced9c5"), XSha1("6b3beabee3e0704fa3269558deab01e9d5d7764e"), true},  // tag-to-tag
+		{XSha1("11e67095628aa17b03436850e690faea3006c25d"), XSha1("89ad5fbeb9d3f0c7bc6366855a09484819289911"), true},  // tag-to-blob
+		{XSha1("ba899e5639273a6fa4d50d684af8db1ae070351e"), XSha1("68ad6a7c31042e53201e47aee6096ed081b6fdb9"), true},  // tag-to-tree
+		{XSha1("61882eb85774ed4401681d800bb9c638031375e2"), XSha1("761f55bcdf119ced3fcf23b69fdc169cbb5fc143"), false}, // ref-to-tree
+		{XSha1("7a3343f584218e973165d943d7c0af47a52ca477"), XSha1("366f3598d662909e2537481852e42b775c7eb837"), false}, // ref-to-blob
+	}
 
-    for _, nc := range noncommitv {
-        // encoded object should be already present
-        _, err := ReadObject2(gb, nc.sha1_)
-        if err != nil {
-            t.Fatalf("encode %s should give %s but expected encoded object not found: %s", nc.sha1, nc.sha1_, err)
-        }
+	for _, nc := range noncommitv {
+		// encoded object should be already present
+		_, err := ReadObject2(gb, nc.sha1_)
+		if err != nil {
+			t.Fatalf("encode %s should give %s but expected encoded object not found: %s", nc.sha1, nc.sha1_, err)
+		}
 
-        // decoding encoded object should give original sha1, if it was tag
-        sha1 := obj_recreate_from_commit(gb, nc.sha1_)
-        if nc.istag && sha1 != nc.sha1 {
-            t.Fatalf("decode %s -> %s ;  want %s", nc.sha1_, sha1, nc.sha1)
-        }
+		// decoding encoded object should give original sha1, if it was tag
+		sha1 := obj_recreate_from_commit(gb, nc.sha1_)
+		if nc.istag && sha1 != nc.sha1 {
+			t.Fatalf("decode %s -> %s ;  want %s", nc.sha1_, sha1, nc.sha1)
+		}
 
-        // encoding original object should give sha1_
-        obj_type := xgit("cat-file", "-t", nc.sha1)
-        sha1_ := obj_represent_as_commit(gb, nc.sha1, xgittype(obj_type))
-        if sha1_ != nc.sha1_ {
-            t.Fatalf("encode %s -> %s ;  want %s", sha1, sha1_, nc.sha1_)
-        }
-    }
+		// encoding original object should give sha1_
+		obj_type := xgit("cat-file", "-t", nc.sha1)
+		sha1_ := obj_represent_as_commit(gb, nc.sha1, xgittype(obj_type))
+		if sha1_ != nc.sha1_ {
+			t.Fatalf("encode %s -> %s ;  want %s", sha1, sha1_, nc.sha1_)
+		}
+	}
 
-    // checks / cleanups after cmd_pull
-    afterPull := func() {
-        // verify no garbage is left under refs/backup/
-        dentryv, err := ioutil.ReadDir("refs/backup/")
-        if err != nil && !os.IsNotExist(err) {
-            t.Fatal(err)
-        }
-        if len(dentryv) != 0 {
-            namev := []string{}
-            for _, fi := range dentryv {
-                namev = append(namev, fi.Name())
-            }
-            t.Fatalf("refs/backup/ not empty after pull: %v", namev)
-        }
+	// checks / cleanups after cmd_pull
+	afterPull := func() {
+		// verify no garbage is left under refs/backup/
+		dentryv, err := ioutil.ReadDir("refs/backup/")
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if len(dentryv) != 0 {
+			namev := []string{}
+			for _, fi := range dentryv {
+				namev = append(namev, fi.Name())
+			}
+			t.Fatalf("refs/backup/ not empty after pull: %v", namev)
+		}
 
-        // prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
-        xgit("prune")
+		// prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
+		xgit("prune")
 
-        // verify backup repo is all ok
-        xgit("fsck")
+		// verify backup repo is all ok
+		xgit("fsck")
 
-        // verify that just pulled tag objects are now gone after pruning -
-        // - they become not directly git-present. The only possibility to
-        // get them back is via recreating from encoded commit objects.
-        for _, nc := range noncommitv {
-            if !nc.istag {
-                continue
-            }
-            gerr, _, _ := ggit("cat-file", "-p", nc.sha1)
-            if gerr == nil {
-                t.Fatalf("tag %s still present in backup.git after git-prune", nc.sha1)
-            }
-        }
+		// verify that just pulled tag objects are now gone after pruning -
+		// - they become not directly git-present. The only possibility to
+		// get them back is via recreating from encoded commit objects.
+		for _, nc := range noncommitv {
+			if !nc.istag {
+				continue
+			}
+			gerr, _, _ := ggit("cat-file", "-p", nc.sha1)
+			if gerr == nil {
+				t.Fatalf("tag %s still present in backup.git after git-prune", nc.sha1)
+			}
+		}
 
-        // reopen backup repository - to avoid having stale cache with present
-        // objects we deleted above with `git prune`
-        gb, err = git.OpenRepository(".")
-        if err != nil {
-            t.Fatal(err)
-        }
-    }
+		// reopen backup repository - to avoid having stale cache with present
+		// objects we deleted above with `git prune`
+		gb, err = git.OpenRepository(".")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 
-    afterPull()
+	afterPull()
 
-    // pull again - it should be noop
-    h1 := xgitSha1("rev-parse", "HEAD")
-    cmd_pull(gb, []string{my1+":b1"})
-    afterPull()
-    h2 := xgitSha1("rev-parse", "HEAD")
-    if h1 == h2 {
-        t.Fatal("pull: second run did not ajusted HEAD")
-    }
-    δ12 := xgit("diff", h1, h2)
-    if δ12 != "" {
-        t.Fatalf("pull: second run was not noop: δ:\n%s", δ12)
-    }
+	// pull again - it should be noop
+	h1 := xgitSha1("rev-parse", "HEAD")
+	cmd_pull(gb, []string{my1 + ":b1"})
+	afterPull()
+	h2 := xgitSha1("rev-parse", "HEAD")
+	if h1 == h2 {
+		t.Fatal("pull: second run did not ajusted HEAD")
+	}
+	δ12 := xgit("diff", h1, h2)
+	if δ12 != "" {
+		t.Fatalf("pull: second run was not noop: δ:\n%s", δ12)
+	}
 
 
-    // restore backup
-    work1 := workdir + "/1"
-    cmd_restore(gb, []string{"HEAD", "b1:"+work1})
+	// restore backup
+	work1 := workdir + "/1"
+	cmd_restore(gb, []string{"HEAD", "b1:" + work1})
 
-    // verify files restored to the same as original
-    gerr, diff, _ := ggit("diff", "--no-index", "--raw", "--exit-code", my1, work1)
-    // 0 - no diff, 1 - has diff, 2 - problem
-    if gerr != nil && gerr.Sys().(syscall.WaitStatus).ExitStatus() > 1 {
-        t.Fatal(gerr)
-    }
-    gitObjectsRe := regexp.MustCompile(`\.git/objects/`)
-    for _, diffline := range strings.Split(diff, "\n") {
-        // :srcmode dstmode srcsha1 dstsha1 status\tpath
-        _, path, err := xstrings.HeadTail(diffline, "\t")
-        if err != nil {
-            t.Fatalf("restorecheck: cannot parse diff line %q", diffline)
-        }
-        // git objects can be represented differently (we check them later)
-        if gitObjectsRe.FindString(path) != "" {
-            continue
-        }
-        t.Fatal("restorecheck: unexpected diff:", diffline)
-    }
+	// verify files restored to the same as original
+	gerr, diff, _ := ggit("diff", "--no-index", "--raw", "--exit-code", my1, work1)
+	// 0 - no diff, 1 - has diff, 2 - problem
+	if gerr != nil && gerr.Sys().(syscall.WaitStatus).ExitStatus() > 1 {
+		t.Fatal(gerr)
+	}
+	gitObjectsRe := regexp.MustCompile(`\.git/objects/`)
+	for _, diffline := range strings.Split(diff, "\n") {
+		// :srcmode dstmode srcsha1 dstsha1 status\tpath
+		_, path, err := xstrings.HeadTail(diffline, "\t")
+		if err != nil {
+			t.Fatalf("restorecheck: cannot parse diff line %q", diffline)
+		}
+		// git objects can be represented differently (we check them later)
+		if gitObjectsRe.FindString(path) != "" {
+			continue
+		}
+		t.Fatal("restorecheck: unexpected diff:", diffline)
+	}
 
-    // verify git objects restored to the same as original
-    err = filepath.Walk(my1, func(path string, info os.FileInfo, err error) error {
-        // any error -> stop
-        if err != nil {
-            return err
-        }
+	// verify git objects restored to the same as original
+	err = filepath.Walk(my1, func(path string, info os.FileInfo, err error) error {
+		// any error -> stop
+		if err != nil {
+			return err
+		}
 
-        // non *.git/ -- not interesting
-        if !(info.IsDir() && strings.HasSuffix(path, ".git")) {
-            return nil
-        }
+		// non *.git/ -- not interesting
+		if !(info.IsDir() && strings.HasSuffix(path, ".git")) {
+			return nil
+		}
 
-        // found git repo - check refs & objects in original and restored are exactly the same,
-        var R = [2]struct{ path, reflist, revlist string }{
-            {path: path},                       // original
-            {path: reprefix(my1, work1, path)}, // restored
-        }
+		// found git repo - check refs & objects in original and restored are exactly the same,
+		var R = [2]struct{ path, reflist, revlist string }{
+			{path: path},                       // original
+			{path: reprefix(my1, work1, path)}, // restored
+		}
 
-        for _, repo := range R {
-            // fsck just in case
-            xgit("--git-dir=" + repo.path, "fsck")
-            // NOTE for-each-ref sorts output by refname
-            repo.reflist = xgit("--git-dir=" + repo.path, "for-each-ref")
-            // NOTE rev-list emits objects in reverse chronological order,
-            //      starting from refs roots which are also ordered by refname
-            repo.revlist = xgit("--git-dir=" + repo.path, "rev-list", "--all", "--objects")
-        }
+		for _, repo := range R {
+			// fsck just in case
+			xgit("--git-dir="+repo.path, "fsck")
+			// NOTE for-each-ref sorts output by refname
+			repo.reflist = xgit("--git-dir="+repo.path, "for-each-ref")
+			// NOTE rev-list emits objects in reverse chronological order,
+			//      starting from refs roots which are also ordered by refname
+			repo.revlist = xgit("--git-dir="+repo.path, "rev-list", "--all", "--objects")
+		}
 
-        if R[0].reflist != R[1].reflist {
-            t.Fatalf("restorecheck: %q restored with different reflist (in %q)", R[0].path, R[1].path)
-        }
+		if R[0].reflist != R[1].reflist {
+			t.Fatalf("restorecheck: %q restored with different reflist (in %q)", R[0].path, R[1].path)
+		}
 
-        if R[0].revlist != R[1].revlist {
-            t.Fatalf("restorecheck: %q restored with differrent objects (in %q)", R[0].path, R[1].path)
-        }
+		if R[0].revlist != R[1].revlist {
+			t.Fatalf("restorecheck: %q restored with differrent objects (in %q)", R[0].path, R[1].path)
+		}
 
-        // .git verified - no need to recurse
-        return filepath.SkipDir
-    })
+		// .git verified - no need to recurse
+		return filepath.SkipDir
+	})
 
-    if err != nil {
-        t.Fatal(err)
-    }
+	if err != nil {
+		t.Fatal(err)
+	}
 
-    // now try to pull corrupt repo - pull should refuse if transferred pack contains bad objects
-    my2 := mydir + "/testdata/2"
-    func() {
-        defer exc.Catch(func(e *exc.Error) {
-            // it ok - pull should raise
+	// now try to pull corrupt repo - pull should refuse if transferred pack contains bad objects
+	my2 := mydir + "/testdata/2"
+	func() {
+		defer exc.Catch(func(e *exc.Error) {
+			// it ok - pull should raise
 
-            // git-backup leaves backup repo locked on error
-            xgit("update-ref", "-d", "refs/backup.locked")
-        })
+			// git-backup leaves backup repo locked on error
+			xgit("update-ref", "-d", "refs/backup.locked")
+		})
 
-        cmd_pull(gb, []string{my2+":b2"})
-        t.Fatal("pull corrupt.git: did not complain")
-    }()
+		cmd_pull(gb, []string{my2 + ":b2"})
+		t.Fatal("pull corrupt.git: did not complain")
+	}()
 
-    // now try to pull repo where `git pack-objects` misbehaves
-    my3 := mydir + "/testdata/3"
-    checkIncompletePack := func(kind, errExpect string) {
-        defer exc.Catch(func(e *exc.Error) {
-            estr := e.Error()
-            bad  := ""
-            badf := func(format string, argv ...interface{}) {
-                bad += fmt.Sprintf(format+"\n", argv...)
-            }
+	// now try to pull repo where `git pack-objects` misbehaves
+	my3 := mydir + "/testdata/3"
+	checkIncompletePack := func(kind, errExpect string) {
+		defer exc.Catch(func(e *exc.Error) {
+			estr := e.Error()
+			bad := ""
+			badf := func(format string, argv ...interface{}) {
+				bad += fmt.Sprintf(format+"\n", argv...)
+			}
 
-            if !strings.Contains(estr, errExpect) {
-                badf("- no %q", errExpect)
-            }
+			if !strings.Contains(estr, errExpect) {
+				badf("- no %q", errExpect)
+			}
 
-            if bad != "" {
-                t.Fatalf("pull incomplete-send-pack.git/%s: complained, but error is wrong:\n%s\nerror: %s", kind, bad, estr)
-            }
+			if bad != "" {
+				t.Fatalf("pull incomplete-send-pack.git/%s: complained, but error is wrong:\n%s\nerror: %s", kind, bad, estr)
+			}
 
-            // git-backup leaves backup repo locked on error
-            xgit("update-ref", "-d", "refs/backup.locked")
-        })
+			// git-backup leaves backup repo locked on error
+			xgit("update-ref", "-d", "refs/backup.locked")
+		})
 
-        // for incomplete-send-pack.git to indeed send incomplete pack, its git
-        // config has to be activated via tweaked $HOME.
-        home, ok := os.LookupEnv("HOME")
-        defer func() {
-            if ok {
-                err = os.Setenv("HOME", home)
-            } else {
-                err = os.Unsetenv("HOME")
-            }
-            exc.Raiseif(err)
-        }()
-        err = os.Setenv("HOME", my3+"/incomplete-send-pack.git/"+kind)
-        exc.Raiseif(err)
+		// for incomplete-send-pack.git to indeed send incomplete pack, its git
+		// config has to be activated via tweaked $HOME.
+		home, ok := os.LookupEnv("HOME")
+		defer func() {
+			if ok {
+				err = os.Setenv("HOME", home)
+			} else {
+				err = os.Unsetenv("HOME")
+			}
+			exc.Raiseif(err)
+		}()
+		err = os.Setenv("HOME", my3+"/incomplete-send-pack.git/"+kind)
+		exc.Raiseif(err)
 
-        cmd_pull(gb, []string{my3+":b3"})
-        t.Fatalf("pull incomplete-send-pack.git/%s: did not complain", kind)
-    }
+		cmd_pull(gb, []string{my3 + ":b3"})
+		t.Fatalf("pull incomplete-send-pack.git/%s: did not complain", kind)
+	}
 
-    // missing blob: should be caught by git itself, because unpack-objects
-    // performs full reachability checks of fetched tips.
-    checkIncompletePack("x-missing-blob", "fatal: unpack-objects")
+	// missing blob: should be caught by git itself, because unpack-objects
+	// performs full reachability checks of fetched tips.
+	checkIncompletePack("x-missing-blob", "fatal: unpack-objects")
 
-    // missing commit: remote sends a pack that is closed under reachability,
-    // but it has objects starting from only parent of requested tip. This way
-    // e.g. commit at tip itself is not sent and the fact that it is missing in
-    // the pack is not caught by fetch-pack. git-backup has to detect the
-    // problem itself.
-    checkIncompletePack("x-commit-send-parent", "remote did not send all neccessary objects")
+	// missing commit: remote sends a pack that is closed under reachability,
+	// but it has objects starting from only parent of requested tip. This way
+	// e.g. commit at tip itself is not sent and the fact that it is missing in
+	// the pack is not caught by fetch-pack. git-backup has to detect the
+	// problem itself.
+	checkIncompletePack("x-commit-send-parent", "remote did not send all neccessary objects")
 
-    // pulling incomplete-send-pack.git without pack-objects hook must succeed:
-    // without $HOME tweaks full and complete pack is sent.
-    cmd_pull(gb, []string{my3+":b3"})
+	// pulling incomplete-send-pack.git without pack-objects hook must succeed:
+	// without $HOME tweaks full and complete pack is sent.
+	cmd_pull(gb, []string{my3 + ":b3"})
 }
 
 func TestRepoRefSplit(t *testing.T) {
-    var tests = []struct{ reporef, repo, ref string }{
-        {"kirr/wendelin.core.git/heads/master", "kirr/wendelin.core.git", "heads/master"},
-        {"kirr/erp5.git/backup/x/master+erp5-data-notebook", "kirr/erp5.git", "backup/x/master+erp5-data-notebook"},
-        {"tiwariayush/Discussion%20Forum%20.git/...", "tiwariayush/Discussion Forum .git", "..."},
-        {"tiwariayush/Discussion%20Forum+.git/...", "tiwariayush/Discussion Forum+.git", "..."},
-        {"tiwariayush/Discussion%2BForum+.git/...", "tiwariayush/Discussion+Forum+.git", "..."},
-    }
+	var tests = []struct{ reporef, repo, ref string }{
+		{"kirr/wendelin.core.git/heads/master", "kirr/wendelin.core.git", "heads/master"},
+		{"kirr/erp5.git/backup/x/master+erp5-data-notebook", "kirr/erp5.git", "backup/x/master+erp5-data-notebook"},
+		{"tiwariayush/Discussion%20Forum%20.git/...", "tiwariayush/Discussion Forum .git", "..."},
+		{"tiwariayush/Discussion%20Forum+.git/...", "tiwariayush/Discussion Forum+.git", "..."},
+		{"tiwariayush/Discussion%2BForum+.git/...", "tiwariayush/Discussion+Forum+.git", "..."},
+	}
 
-    for _, tt := range tests {
-        repo, ref := reporef_split(tt.reporef)
-        if repo != tt.repo || ref != tt.ref {
-            t.Errorf("reporef_split(%q) -> %q %q  ; want %q %q", tt.reporef, repo, ref, tt.repo, tt.ref)
-        }
-    }
+	for _, tt := range tests {
+		repo, ref := reporef_split(tt.reporef)
+		if repo != tt.repo || ref != tt.ref {
+			t.Errorf("reporef_split(%q) -> %q %q  ; want %q %q", tt.reporef, repo, ref, tt.repo, tt.ref)
+		}
+	}
 }

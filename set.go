@@ -25,44 +25,44 @@ package main
 type Sha1Set map[Sha1]struct{}
 
 func (s Sha1Set) Add(v Sha1) {
-    s[v] = struct{}{}
+	s[v] = struct{}{}
 }
 
 func (s Sha1Set) Contains(v Sha1) bool {
-    _, ok := s[v]
-    return ok
+	_, ok := s[v]
+	return ok
 }
 
 // all elements of set as slice
 func (s Sha1Set) Elements() []Sha1 {
-    ev := make([]Sha1, len(s))
-    i := 0
-    for e := range s {
-        ev[i] = e
-        i++
-    }
-    return ev
+	ev := make([]Sha1, len(s))
+	i := 0
+	for e := range s {
+		ev[i] = e
+		i++
+	}
+	return ev
 }
 
 // Set<string>
 type StrSet map[string]struct{}
 
 func (s StrSet) Add(v string) {
-    s[v] = struct{}{}
+	s[v] = struct{}{}
 }
 
 func (s StrSet) Contains(v string) bool {
-    _, ok := s[v]
-    return ok
+	_, ok := s[v]
+	return ok
 }
 
 // all elements of set as slice
 func (s StrSet) Elements() []string {
-    ev := make([]string, len(s))
-    i := 0
-    for e := range s {
-        ev[i] = e
-        i++
-    }
-    return ev
+	ev := make([]string, len(s))
+	i := 0
+	for e := range s {
+		ev[i] = e
+		i++
+	}
+	return ev
 }

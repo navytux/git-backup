@@ -21,142 +21,142 @@ package main
 // Git-backup | Run git subprocess
 
 import (
-    "bytes"
-    "fmt"
-    "os"
-    "os/exec"
-    "strings"
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 
-    "lab.nexedi.com/kirr/go123/exc"
-    "lab.nexedi.com/kirr/go123/mem"
+	"lab.nexedi.com/kirr/go123/exc"
+	"lab.nexedi.com/kirr/go123/mem"
 )
 
 // how/whether to redirect stdio of spawned process
 type StdioRedirect int
 
 const (
-    PIPE StdioRedirect = iota // connect stdio channel via PIPE to parent (default value)
-    DontRedirect
+	PIPE StdioRedirect = iota // connect stdio channel via PIPE to parent (default value)
+	DontRedirect
 )
 
 type RunWith struct {
-    stdin  string
-    stdout StdioRedirect     // PIPE | DontRedirect
-    stderr StdioRedirect     // PIPE | DontRedirect
-    raw    bool              // !raw -> stdout, stderr are stripped
-    env    map[string]string // !nil -> subprocess environment setup from env
+	stdin  string
+	stdout StdioRedirect     // PIPE | DontRedirect
+	stderr StdioRedirect     // PIPE | DontRedirect
+	raw    bool              // !raw -> stdout, stderr are stripped
+	env    map[string]string // !nil -> subprocess environment setup from env
 }
 
 // run `git *argv` -> error, stdout, stderr
 func _git(argv []string, ctx RunWith) (err error, stdout, stderr string) {
-    debugf("git %s", strings.Join(argv, " "))
+	debugf("git %s", strings.Join(argv, " "))
 
-    cmd := exec.Command("git", argv...)
-    stdoutBuf := bytes.Buffer{}
-    stderrBuf := bytes.Buffer{}
+	cmd := exec.Command("git", argv...)
+	stdoutBuf := bytes.Buffer{}
+	stderrBuf := bytes.Buffer{}
 
-    if ctx.stdin != "" {
-        cmd.Stdin = strings.NewReader(ctx.stdin)
-    }
+	if ctx.stdin != "" {
+		cmd.Stdin = strings.NewReader(ctx.stdin)
+	}
 
-    switch ctx.stdout {
-    case PIPE:
-        cmd.Stdout = &stdoutBuf
-    case DontRedirect:
-        cmd.Stdout = os.Stdout
-    default:
-        panic("git: stdout redirect mode invalid")
-    }
+	switch ctx.stdout {
+	case PIPE:
+		cmd.Stdout = &stdoutBuf
+	case DontRedirect:
+		cmd.Stdout = os.Stdout
+	default:
+		panic("git: stdout redirect mode invalid")
+	}
 
-    switch ctx.stderr {
-    case PIPE:
-        cmd.Stderr = &stderrBuf
-    case DontRedirect:
-        cmd.Stderr = os.Stderr
-    default:
-        panic("git: stderr redirect mode invalid")
-    }
+	switch ctx.stderr {
+	case PIPE:
+		cmd.Stderr = &stderrBuf
+	case DontRedirect:
+		cmd.Stderr = os.Stderr
+	default:
+		panic("git: stderr redirect mode invalid")
+	}
 
-    if ctx.env != nil {
-        env := []string{}
-        for k, v := range ctx.env {
-            env = append(env, k+"="+v)
-        }
-        cmd.Env = env
-    }
+	if ctx.env != nil {
+		env := []string{}
+		for k, v := range ctx.env {
+			env = append(env, k+"="+v)
+		}
+		cmd.Env = env
+	}
 
-    err = cmd.Run()
-    stdout = mem.String(stdoutBuf.Bytes())
-    stderr = mem.String(stderrBuf.Bytes())
+	err = cmd.Run()
+	stdout = mem.String(stdoutBuf.Bytes())
+	stderr = mem.String(stderrBuf.Bytes())
 
-    if !ctx.raw {
-        // prettify stdout (e.g. so that 'sha1\n' becomes 'sha1' and can be used directly
-        stdout = strings.TrimSpace(stdout)
-        stderr = strings.TrimSpace(stderr)
-    }
+	if !ctx.raw {
+		// prettify stdout (e.g. so that 'sha1\n' becomes 'sha1' and can be used directly
+		stdout = strings.TrimSpace(stdout)
+		stderr = strings.TrimSpace(stderr)
+	}
 
-    return err, stdout, stderr
+	return err, stdout, stderr
 }
 
 // error a git command returned
 type GitError struct {
-    GitErrContext
-    *exec.ExitError
+	GitErrContext
+	*exec.ExitError
 }
 
 type GitErrContext struct {
-    argv   []string
-    stdin  string
-    stdout string
-    stderr string
+	argv   []string
+	stdin  string
+	stdout string
+	stderr string
 }
 
 func (e *GitError) Error() string {
-    msg := e.GitErrContext.Error()
-    if e.stderr == "" {
-        msg += "(failed)\n"
-    }
-    return msg
+	msg := e.GitErrContext.Error()
+	if e.stderr == "" {
+		msg += "(failed)\n"
+	}
+	return msg
 }
 
 func (e *GitErrContext) Error() string {
-    msg := "git " + strings.Join(e.argv, " ")
-    if e.stdin == "" {
-        msg += " </dev/null\n"
-    } else {
-        msg += " <<EOF\n" + e.stdin
-        if !strings.HasSuffix(msg, "\n") {
-            msg += "\n"
-        }
-        msg += "EOF\n"
-    }
+	msg := "git " + strings.Join(e.argv, " ")
+	if e.stdin == "" {
+		msg += " </dev/null\n"
+	} else {
+		msg += " <<EOF\n" + e.stdin
+		if !strings.HasSuffix(msg, "\n") {
+			msg += "\n"
+		}
+		msg += "EOF\n"
+	}
 
-    msg += e.stderr
-    if !strings.HasSuffix(msg, "\n") {
-        msg += "\n"
-    }
-    return msg
+	msg += e.stderr
+	if !strings.HasSuffix(msg, "\n") {
+		msg += "\n"
+	}
+	return msg
 }
 
 // argv -> []string, ctx    (for passing argv + RunWith handy - see ggit() for details)
 func _gitargv(argv ...interface{}) (argvs []string, ctx RunWith) {
-    ctx_seen := false
+	ctx_seen := false
 
-    for _, arg := range argv {
-        switch arg := arg.(type) {
-        case string:
-            argvs = append(argvs, arg)
-        default:
-            argvs = append(argvs, fmt.Sprint(arg))
-        case RunWith:
-            if ctx_seen {
-                panic("git: multiple RunWith contexts")
-            }
-            ctx, ctx_seen = arg, true
-        }
-    }
+	for _, arg := range argv {
+		switch arg := arg.(type) {
+		case string:
+			argvs = append(argvs, arg)
+		default:
+			argvs = append(argvs, fmt.Sprint(arg))
+		case RunWith:
+			if ctx_seen {
+				panic("git: multiple RunWith contexts")
+			}
+			ctx, ctx_seen = arg, true
+		}
+	}
 
-    return argvs, ctx
+	return argvs, ctx
 }
 
 // run `git *argv` -> err, stdout, stderr
@@ -167,59 +167,59 @@ func _gitargv(argv ...interface{}) (argvs []string, ctx RunWith) {
 //
 // NOTE err is concrete *GitError, not error
 func ggit(argv ...interface{}) (err *GitError, stdout, stderr string) {
-    return ggit2(_gitargv(argv...))
+	return ggit2(_gitargv(argv...))
 }
 
 func ggit2(argv []string, ctx RunWith) (err *GitError, stdout, stderr string) {
-    e, stdout, stderr := _git(argv, ctx)
-    eexec, _ := e.(*exec.ExitError)
-    if e != nil && eexec == nil {
-        exc.Raisef("git %s : ", strings.Join(argv, " "), e)
-    }
-    if eexec != nil {
-        err = &GitError{GitErrContext{argv, ctx.stdin, stdout, stderr}, eexec}
-    }
-    return err, stdout, stderr
+	e, stdout, stderr := _git(argv, ctx)
+	eexec, _ := e.(*exec.ExitError)
+	if e != nil && eexec == nil {
+		exc.Raisef("git %s : ", strings.Join(argv, " "), e)
+	}
+	if eexec != nil {
+		err = &GitError{GitErrContext{argv, ctx.stdin, stdout, stderr}, eexec}
+	}
+	return err, stdout, stderr
 }
 
 // run `git *argv` -> stdout
 // on error - raise exception
 func xgit(argv ...interface{}) string {
-    return xgit2(_gitargv(argv...))
+	return xgit2(_gitargv(argv...))
 }
 
 func xgit2(argv []string, ctx RunWith) string {
-    gerr, stdout, _ := ggit2(argv, ctx)
-    if gerr != nil {
-        exc.Raise(gerr)
-    }
-    return stdout
+	gerr, stdout, _ := ggit2(argv, ctx)
+	if gerr != nil {
+		exc.Raise(gerr)
+	}
+	return stdout
 }
 
 // like xgit(), but automatically parse stdout to Sha1
 func xgitSha1(argv ...interface{}) Sha1 {
-    return xgit2Sha1(_gitargv(argv...))
+	return xgit2Sha1(_gitargv(argv...))
 }
 
 // error when git output is not valid sha1
 type GitSha1Error struct {
-    GitErrContext
+	GitErrContext
 }
 
 func (e *GitSha1Error) Error() string {
-    msg := e.GitErrContext.Error()
-    msg += fmt.Sprintf("expected valid sha1 (got %q)\n", e.stdout)
-    return msg
+	msg := e.GitErrContext.Error()
+	msg += fmt.Sprintf("expected valid sha1 (got %q)\n", e.stdout)
+	return msg
 }
 
 func xgit2Sha1(argv []string, ctx RunWith) Sha1 {
-    gerr, stdout, stderr := ggit2(argv, ctx)
-    if gerr != nil {
-        exc.Raise(gerr)
-    }
-    sha1, err := Sha1Parse(stdout)
-    if err != nil {
-        exc.Raise(&GitSha1Error{GitErrContext{argv, ctx.stdin, stdout, stderr}})
-    }
-    return sha1
+	gerr, stdout, stderr := ggit2(argv, ctx)
+	if gerr != nil {
+		exc.Raise(gerr)
+	}
+	sha1, err := Sha1Parse(stdout)
+	if err != nil {
+		exc.Raise(&GitSha1Error{GitErrContext{argv, ctx.stdin, stdout, stderr}})
+	}
+	return sha1
 }

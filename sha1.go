@@ -21,13 +21,13 @@ package main
 // Git-backup | Sha1 type to work with SHA1 oids
 
 import (
-    "bytes"
-    "encoding/hex"
-    "fmt"
+	"bytes"
+	"encoding/hex"
+	"fmt"
 
-    "lab.nexedi.com/kirr/go123/mem"
+	"lab.nexedi.com/kirr/go123/mem"
 
-    git "github.com/libgit2/git2go"
+	git "github.com/libgit2/git2go"
 )
 
 const SHA1_RAWSIZE = 20
@@ -39,51 +39,51 @@ const SHA1_RAWSIZE = 20
 //      - slice  size = 24 bytes
 //      -> so it is reasonable to pass Sha1 not by reference
 type Sha1 struct {
-    sha1 [SHA1_RAWSIZE]byte
+	sha1 [SHA1_RAWSIZE]byte
 }
 
 // fmt.Stringer
 var _ fmt.Stringer = Sha1{}
 
 func (sha1 Sha1) String() string {
-    return hex.EncodeToString(sha1.sha1[:])
+	return hex.EncodeToString(sha1.sha1[:])
 }
 
 func Sha1Parse(sha1str string) (Sha1, error) {
-    sha1 := Sha1{}
-    if hex.DecodedLen(len(sha1str)) != SHA1_RAWSIZE {
-        return Sha1{}, fmt.Errorf("sha1parse: %q invalid", sha1str)
-    }
-    _, err := hex.Decode(sha1.sha1[:], mem.Bytes(sha1str))
-    if err != nil {
-        return Sha1{}, fmt.Errorf("sha1parse: %q invalid: %s", sha1str, err)
-    }
+	sha1 := Sha1{}
+	if hex.DecodedLen(len(sha1str)) != SHA1_RAWSIZE {
+		return Sha1{}, fmt.Errorf("sha1parse: %q invalid", sha1str)
+	}
+	_, err := hex.Decode(sha1.sha1[:], mem.Bytes(sha1str))
+	if err != nil {
+		return Sha1{}, fmt.Errorf("sha1parse: %q invalid: %s", sha1str, err)
+	}
 
-    return sha1, nil
+	return sha1, nil
 }
 
 // fmt.Scanner
 var _ fmt.Scanner = (*Sha1)(nil)
 
 func (sha1 *Sha1) Scan(s fmt.ScanState, ch rune) error {
-    switch ch {
-    case 's', 'v':
-    default:
-        return fmt.Errorf("Sha1.Scan: invalid verb %q", ch)
-    }
+	switch ch {
+	case 's', 'v':
+	default:
+		return fmt.Errorf("Sha1.Scan: invalid verb %q", ch)
+	}
 
-    tok, err := s.Token(true, nil)
-    if err != nil {
-        return err
-    }
+	tok, err := s.Token(true, nil)
+	if err != nil {
+		return err
+	}
 
-    *sha1, err = Sha1Parse(mem.String(tok))
-    return err
+	*sha1, err = Sha1Parse(mem.String(tok))
+	return err
 }
 
 // check whether sha1 is null
 func (sha1 *Sha1) IsNull() bool {
-    return *sha1 == Sha1{}
+	return *sha1 == Sha1{}
 }
 
 // for sorting by Sha1
@@ -95,9 +95,9 @@ func (p BySha1) Less(i, j int) bool { return bytes.Compare(p[i].sha1[:], p[j].sh
 
 // interoperability with git2go
 func (sha1 *Sha1) AsOid() *git.Oid {
-    return (*git.Oid)(&sha1.sha1)
+	return (*git.Oid)(&sha1.sha1)
 }
 
 func Sha1FromOid(oid *git.Oid) Sha1 {
-    return Sha1{*oid}
+	return Sha1{*oid}
 }
