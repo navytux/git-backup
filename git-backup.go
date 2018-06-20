@@ -18,7 +18,7 @@
 // See https://www.nexedi.com/licensing for rationale and options.
 
 /*
-Git-backup - Backup set of Git repositories & just files; efficiently
+Git-backup - Backup set of Git repositories & just files; efficiently.
 
 This program backups files and set of bare Git repositories into one Git repository.
 Files are copied to blobs and then added to tree under certain place, and for
