@@ -174,7 +174,7 @@ func ggit2(argv []string, ctx RunWith) (err *GitError, stdout, stderr string) {
 	e, stdout, stderr := _git(argv, ctx)
 	eexec, _ := e.(*exec.ExitError)
 	if e != nil && eexec == nil {
-		exc.Raisef("git %s : ", strings.Join(argv, " "), e)
+		exc.Raisef("git %s : %s", strings.Join(argv, " "), e)
 	}
 	if eexec != nil {
 		err = &GitError{GitErrContext{argv, ctx.stdin, stdout, stderr}, eexec}
