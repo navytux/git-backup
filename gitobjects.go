@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016  Nexedi SA and Contributors.
+// Copyright (C) 2015-2020  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -21,6 +21,7 @@ package main
 // Git-backup | Git object: Blob Tree Commit Tag
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -163,9 +164,9 @@ func (e *InvalidLstreeEntry) Error() string {
 
 // create empty git tree -> tree sha1
 var tree_empty Sha1
-func mktree_empty() Sha1 {
+func mktree_empty(ctx context.Context) Sha1 {
 	if tree_empty.IsNull() {
-		tree_empty = xgitSha1("mktree", RunWith{stdin: ""})
+		tree_empty = xgitSha1(ctx, "mktree", RunWith{stdin: ""})
 	}
 	return tree_empty
 }

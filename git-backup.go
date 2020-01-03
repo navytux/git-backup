@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016  Nexedi SA and Contributors.
+// Copyright (C) 2015-2020  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -67,17 +67,18 @@ NOTE the idea of pulling all refs together is similar to git-namespaces
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -87,6 +88,7 @@ import (
 	"lab.nexedi.com/kirr/go123/xerr"
 	"lab.nexedi.com/kirr/go123/xflag"
 	"lab.nexedi.com/kirr/go123/xstrings"
+	"lab.nexedi.com/kirr/go123/xsync"
 
 	git "github.com/libgit2/git2go"
 )
@@ -184,7 +186,7 @@ func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
 // another, so that on backup restore we only have to recreate original tag
 // object and tagged object is kept there in repo thanks to it being reachable
 // through created commit.
-func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type git.ObjectType) Sha1 {
+func obj_represent_as_commit(ctx context.Context, g *git.Repository, sha1 Sha1, obj_type git.ObjectType) Sha1 {
 	switch obj_type {
 	case git.ObjectTag, git.ObjectTree, git.ObjectBlob:
 		// ok
@@ -222,7 +224,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type git.ObjectTy
 	//  v                 .tree   -> ø
 	// Commit             .parent -> Commit
 	if tagged_type == git.ObjectCommit {
-		return zcommit_tree(mktree_empty(), []Sha1{tagged_sha1}, obj_encoded)
+		return zcommit_tree(mktree_empty(ctx), []Sha1{tagged_sha1}, obj_encoded)
 	}
 
 	// Tag        ~>     Commit*
@@ -238,7 +240,7 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type git.ObjectTy
 	//  v                 .tree   -> Tree* "tagged" -> Blob
 	// Blob               .parent -> ø
 	if tagged_type == git.ObjectBlob {
-		tree_for_blob := xgitSha1("mktree", RunWith{stdin: fmt.Sprintf("100644 blob %s\ttagged\n", tagged_sha1)})
+		tree_for_blob := xgitSha1(ctx, "mktree", RunWith{stdin: fmt.Sprintf("100644 blob %s\ttagged\n", tagged_sha1)})
 		return zcommit_tree(tree_for_blob, []Sha1{}, obj_encoded)
 	}
 
@@ -247,8 +249,8 @@ func obj_represent_as_commit(g *git.Repository, sha1 Sha1, obj_type git.ObjectTy
 	//  v                 .tree   -> ø
 	// Tag₁               .parent -> Commit₁*
 	if tagged_type == git.ObjectTag {
-		commit1 := obj_represent_as_commit(g, tagged_sha1, tagged_type)
-		return zcommit_tree(mktree_empty(), []Sha1{commit1}, obj_encoded)
+		commit1 := obj_represent_as_commit(ctx, g, tagged_sha1, tagged_type)
+		return zcommit_tree(mktree_empty(ctx), []Sha1{commit1}, obj_encoded)
 	}
 
 	exc.Raisef("%s (%q): unknown tagged type", sha1, tagged_type)
@@ -334,7 +336,7 @@ type PullSpec struct {
 	dir, prefix string
 }
 
-func cmd_pull(gb *git.Repository, argv []string) {
+func cmd_pull(ctx context.Context, gb *git.Repository, argv []string) {
 	flags := flag.FlagSet{Usage: cmd_pull_usage}
 	flags.Init("", flag.ExitOnError)
 	flags.Parse(argv)
@@ -357,7 +359,7 @@ func cmd_pull(gb *git.Repository, argv []string) {
 		pullspecv = append(pullspecv, PullSpec{dir, prefix})
 	}
 
-	cmd_pull_(gb, pullspecv)
+	cmd_pull_(ctx, gb, pullspecv)
 }
 
 // Ref is info about a reference pointing to sha1.
@@ -366,25 +368,26 @@ type Ref struct {
 	sha1 Sha1
 }
 
-func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
+func cmd_pull_(ctx context.Context, gb *git.Repository, pullspecv []PullSpec) {
 	// while pulling, we'll keep refs from all pulled repositories under temp
 	// unique work refs namespace.
 	backup_time := time.Now().Format("20060102-1504")               // %Y%m%d-%H%M
 	backup_refs_work := fmt.Sprintf("refs/backup/%s/", backup_time) // refs/backup/20150820-2109/
-	backup_lock := "refs/backup.locked"
 
-	// make sure another `git-backup pull` is not running
-	xgit("update-ref", backup_lock, mktree_empty(), Sha1{})
+	// prevent another `git-backup pull` from running simultaneously
+	backup_lock := "refs/backup.locked"
+	xgit(ctx, "update-ref", backup_lock, mktree_empty(ctx), Sha1{})
+	defer xgit(context.Background(), "update-ref", "-d", backup_lock)
 
 	// make sure there is root commit
 	var HEAD Sha1
 	var err error
-	gerr, __, _ := ggit("rev-parse", "--verify", "HEAD")
+	gerr, __, _ := ggit(ctx, "rev-parse", "--verify", "HEAD")
 	if gerr != nil {
 		infof("# creating root commit")
 		// NOTE `git commit` does not work in bare repo - do commit by hand
-		HEAD = xcommit_tree(gb, mktree_empty(), []Sha1{}, "Initialize git-backup repository")
-		xgit("update-ref", "-m", "git-backup pull init", "HEAD", HEAD)
+		HEAD = xcommit_tree(gb, mktree_empty(ctx), []Sha1{}, "Initialize git-backup repository")
+		xgit(ctx, "update-ref", "-m", "git-backup pull init", "HEAD", HEAD)
 	} else {
 		HEAD, err = Sha1Parse(__)
 		exc.Raiseif(err)
@@ -406,7 +409,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 	// Of those there are ~ 1.9·10⁶ commit objects, i.e. ~10% of total.
 	// Since 1 sha1 is 2·10¹ bytes, the space needed for keeping sha1 of all
 	// commits is ~ 4·10⁷B = ~40MB. It is thus ok to keep this index in RAM for now.
-	for _, __ := range xstrings.SplitLines(xgit("rev-list", HEAD), "\n") {
+	for _, __ := range xstrings.SplitLines(xgit(ctx, "rev-list", HEAD), "\n") {
 		sha1, err := Sha1Parse(__)
 		exc.Raiseif(err)
 		alreadyHave.Add(sha1)
@@ -423,7 +426,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 	htree, err := hcommit.Tree()
 	exc.Raiseif(err)
 	if htree.EntryByName("backup.refs") != nil {
-		repotab, err := loadBackupRefs(fmt.Sprintf("%s:backup.refs", HEAD))
+		repotab, err := loadBackupRefs(ctx, fmt.Sprintf("%s:backup.refs", HEAD))
 		exc.Raiseif(err)
 
 		for _, repo := range repotab {
@@ -447,7 +450,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
 		// make sure index is empty for prefix (so that we start from clean
 		// prefix namespace and this way won't leave stale removed things)
-		xgit("rm", "--cached", "-r", "--ignore-unmatch", "--", prefix)
+		xgit(ctx, "rm", "--cached", "-r", "--ignore-unmatch", "--", prefix)
 
 		here := my.FuncName()
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) (errout error) {
@@ -459,6 +462,10 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 				}
 				// any other error -> stop
 				return err
+			}
+
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 
 			// propagate exceptions properly via filepath.Walk as errors with calling context
@@ -490,7 +497,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 
 			// git repo - let's pull all refs from it to our backup refs namespace
 			infof("# git  %s\t<- %s", prefix, path)
-			refv, _, err := fetch(path, alreadyHave)
+			refv, _, err := fetch(ctx, path, alreadyHave)
 			exc.Raiseif(err)
 
 			// TODO don't store to git references all references from fetched repository:
@@ -533,7 +540,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 	}
 
 	// add to index files we converted to blobs
-	xgit("update-index", "--add", "--index-info", RunWith{stdin: strings.Join(blobbedv, "\n")})
+	xgit(ctx, "update-index", "--add", "--index-info", RunWith{stdin: strings.Join(blobbedv, "\n")})
 
 	// all refs from all found git repositories populated.
 	// now prepare manifest with ref -> sha1 and do a synthetic commit merging all that sha1
@@ -551,7 +558,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 	//
 	// NOTE `git for-each-ref` sorts output by ref
 	//      -> backup_refs is sorted and stable between runs
-	backup_refs_dump := xgit("for-each-ref", backup_refs_work)
+	backup_refs_dump := xgit(ctx, "for-each-ref", backup_refs_work)
 	backup_refs_list := []Ref{}       // parsed dump
 	backup_refsv := []string{}        // backup.refs content
 	backup_refs_parents := Sha1Set{}  // sha1 for commit parents, obtained from refs
@@ -577,7 +584,7 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 				if !ok {
 					exc.Raisef("%s: invalid git type in entry %q", backup_refs_work, __)
 				}
-				sha1_ = obj_represent_as_commit(gb, sha1, obj_type)
+				sha1_ = obj_represent_as_commit(ctx, gb, sha1, obj_type)
 				noncommit_seen[sha1] = sha1_
 			}
 
@@ -596,17 +603,17 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 	sort.Sort(BySha1(backup_refs_parentv)) // so parents order is stable in between runs
 
 	// backup_refs -> blob
-	backup_refs_sha1 := xgitSha1("hash-object", "-w", "--stdin", RunWith{stdin: backup_refs})
+	backup_refs_sha1 := xgitSha1(ctx, "hash-object", "-w", "--stdin", RunWith{stdin: backup_refs})
 
 	// add backup_refs blob to index
-	xgit("update-index", "--add", "--cacheinfo", fmt.Sprintf("100644,%s,backup.refs", backup_refs_sha1))
+	xgit(ctx, "update-index", "--add", "--cacheinfo", fmt.Sprintf("100644,%s,backup.refs", backup_refs_sha1))
 
 	// index is ready - prepare tree and commit
-	backup_tree_sha1 := xgitSha1("write-tree")
+	backup_tree_sha1 := xgitSha1(ctx, "write-tree")
 	commit_sha1 := xcommit_tree(gb, backup_tree_sha1, append([]Sha1{HEAD}, backup_refs_parentv...),
 		"Git-backup "+backup_time)
 
-	xgit("update-ref", "-m", "git-backup pull", "HEAD", commit_sha1, HEAD)
+	xgit(ctx, "update-ref", "-m", "git-backup pull", "HEAD", commit_sha1, HEAD)
 
 	// remove no-longer needed backup refs & verify they don't stay
 	backup_refs_delete := ""
@@ -614,8 +621,8 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 		backup_refs_delete += fmt.Sprintf("delete %s %s\n", ref.name, ref.sha1)
 	}
 
-	xgit("update-ref", "--stdin", RunWith{stdin: backup_refs_delete})
-	__ = xgit("for-each-ref", backup_refs_work)
+	xgit(ctx, "update-ref", "--stdin", RunWith{stdin: backup_refs_delete})
+	__ = xgit(ctx, "for-each-ref", backup_refs_work)
 	if __ != "" {
 		exc.Raisef("Backup refs under %s not deleted properly", backup_refs_work)
 	}
@@ -635,28 +642,25 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 	//       accumulate, the longer pull starts to be, so it becomes O(n^2).
 	//
 	//       -> what to do is described nearby fetch/mkref call.
-	gitdir := xgit("rev-parse", "--git-dir")
+	gitdir := xgit(ctx, "rev-parse", "--git-dir")
 	err = os.RemoveAll(gitdir + "/" + backup_refs_work)
 	exc.Raiseif(err) // NOTE err is nil if path does not exist
 
 	// if we have working copy - update it
-	bare := xgit("rev-parse", "--is-bare-repository")
+	bare := xgit(ctx, "rev-parse", "--is-bare-repository")
 	if bare != "true" {
 		// `git checkout-index -af`  -- does not delete deleted files
 		// `git read-tree -v -u --reset HEAD~ HEAD`  -- needs index matching
 		// original worktree to properly work, but we already have updated index
 		//
 		// so we get changes we committed as diff and apply to worktree
-		diff := xgit("diff", "--binary", HEAD, "HEAD", RunWith{raw: true})
+		diff := xgit(ctx, "diff", "--binary", HEAD, "HEAD", RunWith{raw: true})
 		if diff != "" {
-			diffstat := xgit("apply", "--stat", "--apply", "--binary", "--whitespace=nowarn",
+			diffstat := xgit(ctx, "apply", "--stat", "--apply", "--binary", "--whitespace=nowarn",
 				RunWith{stdin: diff, raw: true})
 			infof("%s", diffstat)
 		}
 	}
-
-	// we are done - unlock
-	xgit("update-ref", "-d", backup_lock)
 }
 
 // fetch makes sure all objects from a repository are present in backup place.
@@ -681,11 +685,11 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 //
 // Note: fetch does not create any local references - the references returned
 // only describe state of references in fetched source repository.
-func fetch(repo string, alreadyHave Sha1Set) (refv, fetchedv []Ref, err error) {
+func fetch(ctx context.Context, repo string, alreadyHave Sha1Set) (refv, fetchedv []Ref, err error) {
 	defer xerr.Contextf(&err, "fetch %s", repo)
 
 	// first check which references are advertised
-	refv, err = lsremote(repo)
+	refv, err = lsremote(ctx, repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -731,7 +735,7 @@ func fetch(repo string, alreadyHave Sha1Set) (refv, fetchedv []Ref, err error) {
 	}
 	arg(RunWith{stderr: gitprogress()})
 
-	gerr, _, _ := ggit(argv...)
+	gerr, _, _ := ggit(ctx, argv...)
 	if gerr != nil {
 		return nil, nil, gerr
 	}
@@ -755,7 +759,7 @@ func fetch(repo string, alreadyHave Sha1Set) (refv, fetchedv []Ref, err error) {
 	}
 	arg(RunWith{stderr: gitprogress()})
 
-	gerr, _, _ = ggit(argv...)
+	gerr, _, _ = ggit(ctx, argv...)
 	if gerr != nil {
 		return nil, nil, fmt.Errorf("remote did not send all neccessary objects")
 	}
@@ -765,7 +769,7 @@ func fetch(repo string, alreadyHave Sha1Set) (refv, fetchedv []Ref, err error) {
 }
 
 // lsremote lists all references advertised by repo.
-func lsremote(repo string) (refv []Ref, err error) {
+func lsremote(ctx context.Context, repo string) (refv []Ref, err error) {
 	defer xerr.Contextf(&err, "lsremote %s", repo)
 
 	// NOTE --refs instructs to omit peeled refs like
@@ -778,7 +782,7 @@ func lsremote(repo string) (refv []Ref, err error) {
 	//   https://public-inbox.org/git/20180610143231.7131-1-kirr@nexedi.com/
 	//
 	// we don't need to pull them anyway.
-	gerr, stdout, _ := ggit("ls-remote", "--refs", repo)
+	gerr, stdout, _ := ggit(ctx, "ls-remote", "--refs", repo)
 	if gerr != nil {
 		return nil, gerr
 	}
@@ -822,7 +826,7 @@ type RestoreSpec struct {
 	prefix, dir string
 }
 
-func cmd_restore(gb *git.Repository, argv []string) {
+func cmd_restore(ctx context.Context, gb *git.Repository, argv []string) {
 	flags := flag.FlagSet{Usage: cmd_restore_usage}
 	flags.Init("", flag.ExitOnError)
 	flags.Parse(argv)
@@ -847,7 +851,7 @@ func cmd_restore(gb *git.Repository, argv []string) {
 		restorespecv = append(restorespecv, RestoreSpec{prefix, dir})
 	}
 
-	cmd_restore_(gb, HEAD, restorespecv)
+	cmd_restore_(ctx, gb, HEAD, restorespecv)
 }
 
 // kirr/wendelin.core.git/heads/master -> kirr/wendelin.core.git, heads/master
@@ -944,11 +948,11 @@ type PackExtractReq struct {
 	prefix string
 }
 
-func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) {
-	HEAD := xgitSha1("rev-parse", "--verify", HEAD_)
+func cmd_restore_(ctx context.Context, gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) {
+	HEAD := xgitSha1(ctx, "rev-parse", "--verify", HEAD_)
 
 	// read backup refs index
-	repotab, err := loadBackupRefs(fmt.Sprintf("%s:backup.refs", HEAD))
+	repotab, err := loadBackupRefs(ctx, fmt.Sprintf("%s:backup.refs", HEAD))
 	exc.Raiseif(err)
 
 	// flattened & sorted repotab
@@ -963,23 +967,18 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 	repotab = nil
 
 	packxq := make(chan PackExtractReq, 2*njobs) // requests to extract packs
-	errch := make(chan error)                    // errors from workers
-	stopch := make(chan struct{})                // broadcasts restore has to be cancelled
-	wg := sync.WaitGroup{}
+	wg := xsync.NewWorkGroup(ctx)
 
 	// main worker: walk over specified prefixes restoring files and
 	// scheduling pack extraction requests from *.git -> packxq
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func(ctx context.Context) (err error) {
 		defer close(packxq)
-		// raised err -> errch
+		// raised err -> return
 		here := my.FuncName()
 		defer exc.Catch(func(e *exc.Error) {
-			errch <- exc.Addcallingcontext(here, e)
+			err = exc.Addcallingcontext(here, e)
 		})
 
-	runloop:
 		for _, __ := range restorespecv {
 			prefix, dir := __.prefix, __.dir
 
@@ -988,7 +987,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 			exc.Raiseif(err)
 
 			// files
-			lstree := xgit("ls-tree", "--full-tree", "-r", "-z", "--", HEAD, prefix, RunWith{raw: true})
+			lstree := xgit(ctx, "ls-tree", "--full-tree", "-r", "-z", "--", HEAD, prefix, RunWith{raw: true})
 			repos_seen := StrSet{} // dirs of *.git seen while restoring files
 			for _, __ := range xstrings.SplitLines(lstree, "\x00") {
 				mode, type_, sha1, filename, err := parse_lstree_entry(__)
@@ -999,6 +998,8 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 				if err != nil || type_ != "blob" {
 					exc.Raisef("%s: invalid/unexpected ls-tree entry %q", HEAD, __)
 				}
+
+				exc.Raiseif(ctx.Err())
 
 				filename = reprefix(prefix, dir, filename)
 				infof("# file %s\t-> %s", prefix, filename)
@@ -1043,33 +1044,32 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 					repopath: reprefix(prefix, dir, repo.repopath),
 					prefix:   prefix}:
 
-				case <-stopch:
-					break runloop
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
 		}
-	}()
+
+		return nil
+	})
 
 	// pack workers: packxq -> extract packs
 	for i := 0; i < njobs; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// raised err -> errch
+		wg.Go(func(ctx context.Context) (err error) {
+			// raised err -> return
 			here := my.FuncName()
 			defer exc.Catch(func(e *exc.Error) {
-				errch <- exc.Addcallingcontext(here, e)
+				err = exc.Addcallingcontext(here, e)
 			})
 
-		runloop:
 			for {
 				select {
-				case <-stopch:
-					break runloop
+				case <-ctx.Done():
+					return ctx.Err()
 
 				case p, ok := <-packxq:
 					if !ok {
-						break runloop
+						return nil
 					}
 					infof("# git  %s\t-> %s", p.prefix, p.repopath)
 
@@ -1089,10 +1089,10 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 					}
 					pack_argv = append(pack_argv, p.repopath+"/objects/pack/pack")
 
-					xgit2(pack_argv, RunWith{stdin: p.refs.Sha1HeadsStr(), stderr: gitprogress()})
+					xgit2(ctx, pack_argv, RunWith{stdin: p.refs.Sha1HeadsStr(), stderr: gitprogress()})
 
 					// verify that extracted repo refs match backup.refs index after extraction
-					x_ref_list := xgit("--git-dir="+p.repopath,
+					x_ref_list := xgit(ctx, "--git-dir="+p.repopath,
 						"for-each-ref", "--format=%(objectname) %(refname)")
 					repo_refs := p.refs.Values()
 					sort.Sort(ByRefname(repo_refs))
@@ -1114,7 +1114,7 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 					//
 					// Compared to fsck we do not re-compute sha1 sum of objects which
 					// is significantly faster.
-					gerr, _, _ := ggit("--git-dir="+p.repopath,
+					gerr, _, _ := ggit(ctx, "--git-dir="+p.repopath,
 						"rev-list", "--objects", "--stdin", "--quiet", RunWith{stdin: p.refs.Sha1HeadsStr()})
 					if gerr != nil {
 						fmt.Fprintln(os.Stderr, "E: Problem while checking connectivity of extracted repo:")
@@ -1131,36 +1131,21 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 					//         RunWith{stdout: gitprogress(), stderr: gitprogress()})
 				}
 			}
-		}()
+		})
 	}
 
-	// wait for workers to finish & collect/reraise their errors
-	go func() {
-		wg.Wait()
-		close(errch)
-	}()
-
-	ev := xerr.Errorv{}
-	for e := range errch {
-		// tell everything to stop on first error
-		if len(ev) == 0 {
-			close(stopch)
-		}
-		ev = append(ev, e)
-	}
-
-	if len(ev) != 0 {
-		exc.Raise(ev)
-	}
+	// wait for workers to finish & collect/reraise first error, if any
+	err = wg.Wait()
+	exc.Raiseif(err)
 }
 
 // loadBackupRefs loads 'backup.ref' content from a git object.
 //
 // an example of object is e.g. "HEAD:backup.ref".
-func loadBackupRefs(object string) (repotab map[string]*BackupRepo, err error) {
+func loadBackupRefs(ctx context.Context, object string) (repotab map[string]*BackupRepo, err error) {
 	defer xerr.Contextf(&err, "load backup.refs %q", object)
 
-	gerr, backup_refs, _ := ggit("cat-file", "blob", object)
+	gerr, backup_refs, _ := ggit(ctx, "cat-file", "blob", object)
 	if gerr != nil {
 		return nil, gerr
 	}
@@ -1199,7 +1184,7 @@ func loadBackupRefs(object string) (repotab map[string]*BackupRepo, err error) {
 	return repotab, nil
 }
 
-var commands = map[string]func(*git.Repository, []string){
+var commands = map[string]func(context.Context, *git.Repository, []string){
 	"pull":    cmd_pull,
 	"restore": cmd_restore,
 }
@@ -1256,9 +1241,22 @@ func main() {
 		os.Exit(1)
 	})
 
+	// cancel what we'll do on SIGINT | SIGTERM
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigq := make(chan os.Signal, 1)
+	signal.Notify(sigq, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-sigq:
+			cancel()
+		}
+	}()
+
 	// backup repository
 	gb, err := git.OpenRepository(".")
 	exc.Raiseif(err)
 
-	cmd(gb, argv[1:])
+	cmd(ctx, gb, argv[1:])
 }

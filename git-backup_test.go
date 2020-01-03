@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016  Nexedi SA and Contributors.
+// Copyright (C) 2015-2020  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -20,6 +20,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -68,9 +69,16 @@ func xgittype(s string) git.ObjectType {
 	return type_
 }
 
+// xnoref asserts that git reference ref does not exists.
+func xnoref(ref string) {
+	xgit(context.Background(), "update-ref", "--stdin", RunWith{stdin: fmt.Sprintf("verify refs/%s %s\n", ref, Sha1{})})
+}
+
 
 // verify end-to-end pull-restore
 func TestPullRestore(t *testing.T) {
+	ctx := context.Background()
+
 	// if something raises -> don't let testing panic - report it as proper error with context.
 	here := my.FuncName()
 	defer exc.Catch(func(e *exc.Error) {
@@ -109,7 +117,7 @@ func TestPullRestore(t *testing.T) {
 	}
 
 	// init backup repository
-	xgit("init", "--bare", "backup.git")
+	xgit(ctx, "init", "--bare", "backup.git")
 	xchdir(t, "backup.git")
 	gb, err := git.OpenRepository(".")
 	if err != nil {
@@ -118,10 +126,10 @@ func TestPullRestore(t *testing.T) {
 
 	// pull from testdata
 	my0 := mydir + "/testdata/0"
-	cmd_pull(gb, []string{my0 + ":b0"}) // only empty repo in testdata/0
+	cmd_pull(ctx, gb, []string{my0 + ":b0"}) // only empty repo in testdata/0
 
 	my1 := mydir + "/testdata/1"
-	cmd_pull(gb, []string{my1 + ":b1"})
+	cmd_pull(ctx, gb, []string{my1 + ":b1"})
 
 	// verify tag/tree/blob encoding is 1) consistent and 2) always the same.
 	// we need it be always the same so different git-backup versions can
@@ -153,8 +161,8 @@ func TestPullRestore(t *testing.T) {
 		}
 
 		// encoding original object should give sha1_
-		obj_type := xgit("cat-file", "-t", nc.sha1)
-		sha1_ := obj_represent_as_commit(gb, nc.sha1, xgittype(obj_type))
+		obj_type := xgit(ctx, "cat-file", "-t", nc.sha1)
+		sha1_ := obj_represent_as_commit(ctx, gb, nc.sha1, xgittype(obj_type))
 		if sha1_ != nc.sha1_ {
 			t.Fatalf("encode %s -> %s ;  want %s", sha1, sha1_, nc.sha1_)
 		}
@@ -176,10 +184,10 @@ func TestPullRestore(t *testing.T) {
 		}
 
 		// prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
-		xgit("prune")
+		xgit(ctx, "prune")
 
 		// verify backup repo is all ok
-		xgit("fsck")
+		xgit(ctx, "fsck")
 
 		// verify that just pulled tag objects are now gone after pruning -
 		// - they become not directly git-present. The only possibility to
@@ -188,7 +196,7 @@ func TestPullRestore(t *testing.T) {
 			if !nc.istag {
 				continue
 			}
-			gerr, _, _ := ggit("cat-file", "-p", nc.sha1)
+			gerr, _, _ := ggit(ctx, "cat-file", "-p", nc.sha1)
 			if gerr == nil {
 				t.Fatalf("tag %s still present in backup.git after git-prune", nc.sha1)
 			}
@@ -205,14 +213,14 @@ func TestPullRestore(t *testing.T) {
 	afterPull()
 
 	// pull again - it should be noop
-	h1 := xgitSha1("rev-parse", "HEAD")
-	cmd_pull(gb, []string{my1 + ":b1"})
+	h1 := xgitSha1(ctx, "rev-parse", "HEAD")
+	cmd_pull(ctx, gb, []string{my1 + ":b1"})
 	afterPull()
-	h2 := xgitSha1("rev-parse", "HEAD")
+	h2 := xgitSha1(ctx, "rev-parse", "HEAD")
 	if h1 == h2 {
 		t.Fatal("pull: second run did not ajusted HEAD")
 	}
-	δ12 := xgit("diff", h1, h2)
+	δ12 := xgit(ctx, "diff", h1, h2)
 	if δ12 != "" {
 		t.Fatalf("pull: second run was not noop: δ:\n%s", δ12)
 	}
@@ -220,10 +228,10 @@ func TestPullRestore(t *testing.T) {
 
 	// restore backup
 	work1 := workdir + "/1"
-	cmd_restore(gb, []string{"HEAD", "b1:" + work1})
+	cmd_restore(ctx, gb, []string{"HEAD", "b1:" + work1})
 
 	// verify files restored to the same as original
-	gerr, diff, _ := ggit("diff", "--no-index", "--raw", "--exit-code", my1, work1)
+	gerr, diff, _ := ggit(ctx, "diff", "--no-index", "--raw", "--exit-code", my1, work1)
 	// 0 - no diff, 1 - has diff, 2 - problem
 	if gerr != nil && gerr.Sys().(syscall.WaitStatus).ExitStatus() > 1 {
 		t.Fatal(gerr)
@@ -262,12 +270,12 @@ func TestPullRestore(t *testing.T) {
 
 		for _, repo := range R {
 			// fsck just in case
-			xgit("--git-dir="+repo.path, "fsck")
+			xgit(ctx, "--git-dir="+repo.path, "fsck")
 			// NOTE for-each-ref sorts output by refname
-			repo.reflist = xgit("--git-dir="+repo.path, "for-each-ref")
+			repo.reflist = xgit(ctx, "--git-dir="+repo.path, "for-each-ref")
 			// NOTE rev-list emits objects in reverse chronological order,
 			//      starting from refs roots which are also ordered by refname
-			repo.revlist = xgit("--git-dir="+repo.path, "rev-list", "--all", "--objects")
+			repo.revlist = xgit(ctx, "--git-dir="+repo.path, "rev-list", "--all", "--objects")
 		}
 
 		if R[0].reflist != R[1].reflist {
@@ -292,11 +300,11 @@ func TestPullRestore(t *testing.T) {
 		defer exc.Catch(func(e *exc.Error) {
 			// it ok - pull should raise
 
-			// git-backup leaves backup repo locked on error
-			xgit("update-ref", "-d", "refs/backup.locked")
+			// git-backup should not leave backup repo locked on error
+			xnoref("backup.locked")
 		})
 
-		cmd_pull(gb, []string{my2 + ":b2"})
+		cmd_pull(ctx, gb, []string{my2 + ":b2"})
 		t.Fatal("pull corrupt.git: did not complain")
 	}()
 
@@ -318,8 +326,8 @@ func TestPullRestore(t *testing.T) {
 				t.Fatalf("pull incomplete-send-pack.git/%s: complained, but error is wrong:\n%s\nerror: %s", kind, bad, estr)
 			}
 
-			// git-backup leaves backup repo locked on error
-			xgit("update-ref", "-d", "refs/backup.locked")
+			// git-backup should not leave backup repo locked on error
+			xnoref("backup.locked")
 		})
 
 		// for incomplete-send-pack.git to indeed send incomplete pack, its git
@@ -336,7 +344,7 @@ func TestPullRestore(t *testing.T) {
 		err = os.Setenv("HOME", my3+"/incomplete-send-pack.git/"+kind)
 		exc.Raiseif(err)
 
-		cmd_pull(gb, []string{my3 + ":b3"})
+		cmd_pull(ctx, gb, []string{my3 + ":b3"})
 		t.Fatalf("pull incomplete-send-pack.git/%s: did not complain", kind)
 	}
 
@@ -353,7 +361,7 @@ func TestPullRestore(t *testing.T) {
 
 	// pulling incomplete-send-pack.git without pack-objects hook must succeed:
 	// without $HOME tweaks full and complete pack is sent.
-	cmd_pull(gb, []string{my3 + ":b3"})
+	cmd_pull(ctx, gb, []string{my3 + ":b3"})
 }
 
 func TestRepoRefSplit(t *testing.T) {

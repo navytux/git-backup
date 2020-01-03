@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016  Nexedi SA and Contributors.
+// Copyright (C) 2015-2020  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,18 +49,20 @@ type RunWith struct {
 }
 
 // run `git *argv` -> error, stdout, stderr
-func _git(argv []string, ctx RunWith) (err error, stdout, stderr string) {
+func _git(ctx context.Context, argv []string, rctx RunWith) (err error, stdout, stderr string) {
 	debugf("git %s", strings.Join(argv, " "))
 
-	cmd := exec.Command("git", argv...)
+	// XXX exec.CommandContext does `kill -9` on ctx cancel
+	// XXX -> rework to `kill -TERM` so that spawned process can finish cleanly?
+	cmd := exec.CommandContext(ctx, "git", argv...)
 	stdoutBuf := bytes.Buffer{}
 	stderrBuf := bytes.Buffer{}
 
-	if ctx.stdin != "" {
-		cmd.Stdin = strings.NewReader(ctx.stdin)
+	if rctx.stdin != "" {
+		cmd.Stdin = strings.NewReader(rctx.stdin)
 	}
 
-	switch ctx.stdout {
+	switch rctx.stdout {
 	case PIPE:
 		cmd.Stdout = &stdoutBuf
 	case DontRedirect:
@@ -68,7 +71,7 @@ func _git(argv []string, ctx RunWith) (err error, stdout, stderr string) {
 		panic("git: stdout redirect mode invalid")
 	}
 
-	switch ctx.stderr {
+	switch rctx.stderr {
 	case PIPE:
 		cmd.Stderr = &stderrBuf
 	case DontRedirect:
@@ -77,9 +80,9 @@ func _git(argv []string, ctx RunWith) (err error, stdout, stderr string) {
 		panic("git: stderr redirect mode invalid")
 	}
 
-	if ctx.env != nil {
+	if rctx.env != nil {
 		env := []string{}
-		for k, v := range ctx.env {
+		for k, v := range rctx.env {
 			env = append(env, k+"="+v)
 		}
 		cmd.Env = env
@@ -89,7 +92,7 @@ func _git(argv []string, ctx RunWith) (err error, stdout, stderr string) {
 	stdout = mem.String(stdoutBuf.Bytes())
 	stderr = mem.String(stderrBuf.Bytes())
 
-	if !ctx.raw {
+	if !rctx.raw {
 		// prettify stdout (e.g. so that 'sha1\n' becomes 'sha1' and can be used directly
 		stdout = strings.TrimSpace(stdout)
 		stderr = strings.TrimSpace(stderr)
@@ -138,9 +141,9 @@ func (e *GitErrContext) Error() string {
 	return msg
 }
 
-// argv -> []string, ctx    (for passing argv + RunWith handy - see ggit() for details)
-func _gitargv(argv ...interface{}) (argvs []string, ctx RunWith) {
-	ctx_seen := false
+// ctx, argv -> ctx, []string, rctx  (for passing argv + RunWith handy - see ggit() for details)
+func _gitargv(ctx context.Context, argv ...interface{}) (_ context.Context, argvs []string, rctx RunWith) {
+	rctx_seen := false
 
 	for _, arg := range argv {
 		switch arg := arg.(type) {
@@ -149,47 +152,47 @@ func _gitargv(argv ...interface{}) (argvs []string, ctx RunWith) {
 		default:
 			argvs = append(argvs, fmt.Sprint(arg))
 		case RunWith:
-			if ctx_seen {
+			if rctx_seen {
 				panic("git: multiple RunWith contexts")
 			}
-			ctx, ctx_seen = arg, true
+			rctx, rctx_seen = arg, true
 		}
 	}
 
-	return argvs, ctx
+	return ctx, argvs, rctx
 }
 
 // run `git *argv` -> err, stdout, stderr
 // - arguments are automatically converted to strings
-// - RunWith argument is passed as ctx
+// - RunWith argument is passed as rctx
 // - error is returned only when git command could run and exits with error status
 // - on other errors - exception is raised
 //
 // NOTE err is concrete *GitError, not error
-func ggit(argv ...interface{}) (err *GitError, stdout, stderr string) {
-	return ggit2(_gitargv(argv...))
+func ggit(ctx context.Context, argv ...interface{}) (err *GitError, stdout, stderr string) {
+	return ggit2(_gitargv(ctx, argv...))
 }
 
-func ggit2(argv []string, ctx RunWith) (err *GitError, stdout, stderr string) {
-	e, stdout, stderr := _git(argv, ctx)
+func ggit2(ctx context.Context, argv []string, rctx RunWith) (err *GitError, stdout, stderr string) {
+	e, stdout, stderr := _git(ctx, argv, rctx)
 	eexec, _ := e.(*exec.ExitError)
 	if e != nil && eexec == nil {
 		exc.Raisef("git %s : %s", strings.Join(argv, " "), e)
 	}
 	if eexec != nil {
-		err = &GitError{GitErrContext{argv, ctx.stdin, stdout, stderr}, eexec}
+		err = &GitError{GitErrContext{argv, rctx.stdin, stdout, stderr}, eexec}
 	}
 	return err, stdout, stderr
 }
 
 // run `git *argv` -> stdout
 // on error - raise exception
-func xgit(argv ...interface{}) string {
-	return xgit2(_gitargv(argv...))
+func xgit(ctx context.Context, argv ...interface{}) string {
+	return xgit2(_gitargv(ctx, argv...))
 }
 
-func xgit2(argv []string, ctx RunWith) string {
-	gerr, stdout, _ := ggit2(argv, ctx)
+func xgit2(ctx context.Context, argv []string, rctx RunWith) string {
+	gerr, stdout, _ := ggit2(ctx, argv, rctx)
 	if gerr != nil {
 		exc.Raise(gerr)
 	}
@@ -197,8 +200,8 @@ func xgit2(argv []string, ctx RunWith) string {
 }
 
 // like xgit(), but automatically parse stdout to Sha1
-func xgitSha1(argv ...interface{}) Sha1 {
-	return xgit2Sha1(_gitargv(argv...))
+func xgitSha1(ctx context.Context, argv ...interface{}) Sha1 {
+	return xgit2Sha1(_gitargv(ctx, argv...))
 }
 
 // error when git output is not valid sha1
@@ -212,14 +215,14 @@ func (e *GitSha1Error) Error() string {
 	return msg
 }
 
-func xgit2Sha1(argv []string, ctx RunWith) Sha1 {
-	gerr, stdout, stderr := ggit2(argv, ctx)
+func xgit2Sha1(ctx context.Context, argv []string, rctx RunWith) Sha1 {
+	gerr, stdout, stderr := ggit2(ctx, argv, rctx)
 	if gerr != nil {
 		exc.Raise(gerr)
 	}
 	sha1, err := Sha1Parse(stdout)
 	if err != nil {
-		exc.Raise(&GitSha1Error{GitErrContext{argv, ctx.stdin, stdout, stderr}})
+		exc.Raise(&GitSha1Error{GitErrContext{argv, rctx.stdin, stdout, stderr}})
 	}
 	return sha1
 }
