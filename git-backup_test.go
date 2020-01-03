@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016  Nexedi SA and Contributors.
+// Copyright (C) 2015-2020  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -66,6 +66,11 @@ func xgittype(s string) git.ObjectType {
 		exc.Raisef("unknown git type %q", s)
 	}
 	return type_
+}
+
+// xnoref asserts that git reference ref does not exists.
+func xnoref(ref string) {
+	xgit("update-ref", "--stdin", RunWith{stdin: fmt.Sprintf("verify refs/%s %s\n", ref, Sha1{})})
 }
 
 
@@ -292,8 +297,8 @@ func TestPullRestore(t *testing.T) {
 		defer exc.Catch(func(e *exc.Error) {
 			// it ok - pull should raise
 
-			// git-backup leaves backup repo locked on error
-			xgit("update-ref", "-d", "refs/backup.locked")
+			// git-backup should not leave backup repo locked on error
+			xnoref("backup.locked")
 		})
 
 		cmd_pull(gb, []string{my2 + ":b2"})
@@ -318,8 +323,8 @@ func TestPullRestore(t *testing.T) {
 				t.Fatalf("pull incomplete-send-pack.git/%s: complained, but error is wrong:\n%s\nerror: %s", kind, bad, estr)
 			}
 
-			// git-backup leaves backup repo locked on error
-			xgit("update-ref", "-d", "refs/backup.locked")
+			// git-backup should not leave backup repo locked on error
+			xnoref("backup.locked")
 		})
 
 		// for incomplete-send-pack.git to indeed send incomplete pack, its git

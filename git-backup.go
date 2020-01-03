@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2016  Nexedi SA and Contributors.
+// Copyright (C) 2015-2020  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -371,10 +371,11 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 	// unique work refs namespace.
 	backup_time := time.Now().Format("20060102-1504")               // %Y%m%d-%H%M
 	backup_refs_work := fmt.Sprintf("refs/backup/%s/", backup_time) // refs/backup/20150820-2109/
-	backup_lock := "refs/backup.locked"
 
-	// make sure another `git-backup pull` is not running
+	// prevent another `git-backup pull` from running simultaneously
+	backup_lock := "refs/backup.locked"
 	xgit("update-ref", backup_lock, mktree_empty(), Sha1{})
+	defer xgit("update-ref", "-d", backup_lock)
 
 	// make sure there is root commit
 	var HEAD Sha1
@@ -654,9 +655,6 @@ func cmd_pull_(gb *git.Repository, pullspecv []PullSpec) {
 			infof("%s", diffstat)
 		}
 	}
-
-	// we are done - unlock
-	xgit("update-ref", "-d", backup_lock)
 }
 
 // fetch makes sure all objects from a repository are present in backup place.
