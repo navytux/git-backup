@@ -72,6 +72,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/signal"
 	pathpkg "path"
 	"path/filepath"
 	"runtime"
@@ -1240,9 +1241,22 @@ func main() {
 		os.Exit(1)
 	})
 
+	// cancel what we'll do on SIGINT | SIGTERM
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigq := make(chan os.Signal, 1)
+	signal.Notify(sigq, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-sigq:
+			cancel()
+		}
+	}()
+
 	// backup repository
 	gb, err := git.OpenRepository(".")
 	exc.Raiseif(err)
 
-	cmd(context.Background(), gb, argv[1:])
+	cmd(ctx, gb, argv[1:])
 }
