@@ -67,6 +67,7 @@ NOTE the idea of pulling all refs together is similar to git-namespaces
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -77,7 +78,6 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -87,6 +87,7 @@ import (
 	"lab.nexedi.com/kirr/go123/xerr"
 	"lab.nexedi.com/kirr/go123/xflag"
 	"lab.nexedi.com/kirr/go123/xstrings"
+	"lab.nexedi.com/kirr/go123/xsync"
 
 	git "github.com/libgit2/git2go"
 )
@@ -961,23 +962,18 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 	repotab = nil
 
 	packxq := make(chan PackExtractReq, 2*njobs) // requests to extract packs
-	errch := make(chan error)                    // errors from workers
-	stopch := make(chan struct{})                // broadcasts restore has to be cancelled
-	wg := sync.WaitGroup{}
+	wg := xsync.NewWorkGroup(context.Background())
 
 	// main worker: walk over specified prefixes restoring files and
 	// scheduling pack extraction requests from *.git -> packxq
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func(ctx context.Context) (err error) {
 		defer close(packxq)
-		// raised err -> errch
+		// raised err -> return
 		here := my.FuncName()
 		defer exc.Catch(func(e *exc.Error) {
-			errch <- exc.Addcallingcontext(here, e)
+			err = exc.Addcallingcontext(here, e)
 		})
 
-	runloop:
 		for _, __ := range restorespecv {
 			prefix, dir := __.prefix, __.dir
 
@@ -1041,33 +1037,32 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 					repopath: reprefix(prefix, dir, repo.repopath),
 					prefix:   prefix}:
 
-				case <-stopch:
-					break runloop
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
 		}
-	}()
+
+		return nil
+	})
 
 	// pack workers: packxq -> extract packs
 	for i := 0; i < njobs; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// raised err -> errch
+		wg.Go(func(ctx context.Context) (err error) {
+			// raised err -> return
 			here := my.FuncName()
 			defer exc.Catch(func(e *exc.Error) {
-				errch <- exc.Addcallingcontext(here, e)
+				err = exc.Addcallingcontext(here, e)
 			})
 
-		runloop:
 			for {
 				select {
-				case <-stopch:
-					break runloop
+				case <-ctx.Done():
+					return ctx.Err()
 
 				case p, ok := <-packxq:
 					if !ok {
-						break runloop
+						return nil
 					}
 					infof("# git  %s\t-> %s", p.prefix, p.repopath)
 
@@ -1129,27 +1124,12 @@ func cmd_restore_(gb *git.Repository, HEAD_ string, restorespecv []RestoreSpec) 
 					//         RunWith{stdout: gitprogress(), stderr: gitprogress()})
 				}
 			}
-		}()
+		})
 	}
 
-	// wait for workers to finish & collect/reraise their errors
-	go func() {
-		wg.Wait()
-		close(errch)
-	}()
-
-	ev := xerr.Errorv{}
-	for e := range errch {
-		// tell everything to stop on first error
-		if len(ev) == 0 {
-			close(stopch)
-		}
-		ev = append(ev, e)
-	}
-
-	if len(ev) != 0 {
-		exc.Raise(ev)
-	}
+	// wait for workers to finish & collect/reraise first error, if any
+	err = wg.Wait()
+	exc.Raiseif(err)
 }
 
 // loadBackupRefs loads 'backup.ref' content from a git object.
