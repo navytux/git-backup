@@ -494,6 +494,13 @@ func cmd_pull_(ctx context.Context, gb *git.Repository, pullspecv []PullSpec) {
 			if !strings.HasSuffix(path, ".git") {
 				return nil
 			}
+			head, err := os.Stat(path + "/HEAD")
+			if os.IsNotExist(err) || head.IsDir() {
+				return nil // not a git repository
+			}
+			if err != nil {
+				return err
+			}
 
 			// git repo - let's pull all refs from it to our backup refs namespace
 			infof("# git  %s\t<- %s", prefix, path)
@@ -1012,7 +1019,7 @@ func cmd_restore_(ctx context.Context, gb *git.Repository, HEAD_ string, restore
 				//   empty - without refs at all, and thus next "git packs restore"
 				//   step will not be run for it.
 				filedir := pathpkg.Dir(filename)
-				if strings.HasSuffix(filedir, ".git") && !repos_seen.Contains(filedir) {
+				if strings.HasSuffix(filename, ".git/HEAD") && !repos_seen.Contains(filedir) {
 					infof("# repo %s\t-> %s", prefix, filedir)
 					for _, __ := range []string{"refs/heads", "refs/tags", "objects/pack"} {
 						err := os.MkdirAll(filedir+"/"+__, 0777)

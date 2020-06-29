@@ -257,8 +257,8 @@ func TestPullRestore(t *testing.T) {
 			return err
 		}
 
-		// non *.git/ -- not interesting
-		if !(info.IsDir() && strings.HasSuffix(path, ".git")) {
+		// non *.git/ or nongit.git/ -- not interesting
+		if !(info.IsDir() && strings.HasSuffix(path, ".git")) || info.Name() == "nongit.git" {
 			return nil
 		}
 
