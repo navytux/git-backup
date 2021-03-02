@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2020  Nexedi SA and Contributors.
+// Copyright (C) 2015-2021  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -33,7 +33,7 @@ import (
 	"lab.nexedi.com/kirr/go123/mem"
 	"lab.nexedi.com/kirr/go123/xstrings"
 
-	git "github.com/libgit2/git2go"
+	git "github.com/libgit2/git2go/v31"
 )
 
 // read/write raw objects
@@ -271,7 +271,7 @@ func gittype(typ string) (git.ObjectType, bool) {
 	case "tag":    return git.ObjectTag, true
 	}
 
-	return git.ObjectBad, false
+	return git.ObjectInvalid, false
 
 }
 
