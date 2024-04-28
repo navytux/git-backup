@@ -312,6 +312,7 @@ func TestPullRestore(t *testing.T) {
 	// now try to pull repo where `git pack-objects` misbehaves
 	my3 := mydir + "/testdata/3"
 	checkIncompletePack := func(kind, errExpect string) {
+		errExpectRe := regexp.MustCompile(errExpect)
 		defer exc.Catch(func(e *exc.Error) {
 			estr := e.Error()
 			bad := ""
@@ -319,7 +320,7 @@ func TestPullRestore(t *testing.T) {
 				bad += fmt.Sprintf(format+"\n", argv...)
 			}
 
-			if !strings.Contains(estr, errExpect) {
+			if errExpectRe.FindString(estr) == "" {
 				badf("- no %q", errExpect)
 			}
 
@@ -349,9 +350,9 @@ func TestPullRestore(t *testing.T) {
 		t.Fatalf("pull incomplete-send-pack.git/%s: did not complain", kind)
 	}
 
-	// missing blob: should be caught by git itself, because unpack-objects
-	// performs full reachability checks of fetched tips.
-	checkIncompletePack("x-missing-blob", "fatal: unpack-objects")
+	// missing blob: should be caught by git itself, because unpack-objects (git < 2.31)
+	// or index-pack (git ≥ 2.31) perform full reachability checks of fetched tips.
+	checkIncompletePack("x-missing-blob", "fatal: (unpack-objects|index-pack)")
 
 	// missing commit: remote sends a pack that is closed under reachability,
 	// but it has objects starting from only parent of requested tip. This way
