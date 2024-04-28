@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2021  Nexedi SA and Contributors.
+// Copyright (C) 2015-2024  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -184,7 +184,8 @@ func TestPullRestore(t *testing.T) {
 		}
 
 		// prune all non-reachable objects (e.g. tags just pulled - they were encoded as commits)
-		xgit(ctx, "prune")
+		xgit(ctx, "prune")	   // remove unreachable loose objects
+		xgit(ctx, "repack", "-ad") // remove unreachable objects in packs
 
 		// verify backup repo is all ok
 		xgit(ctx, "fsck")
@@ -198,12 +199,12 @@ func TestPullRestore(t *testing.T) {
 			}
 			gerr, _, _ := ggit(ctx, "cat-file", "-p", nc.sha1)
 			if gerr == nil {
-				t.Fatalf("tag %s still present in backup.git after git-prune", nc.sha1)
+				t.Fatalf("tag %s still present in backup.git after git-prune + `git-repack -ad`", nc.sha1)
 			}
 		}
 
 		// reopen backup repository - to avoid having stale cache with present
-		// objects we deleted above with `git prune`
+		// objects we deleted above with `git prune` + `git repack -ad`
 		gb, err = git.OpenRepository(".")
 		if err != nil {
 			t.Fatal(err)
