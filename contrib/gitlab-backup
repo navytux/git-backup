@@ -268,7 +268,7 @@ backup_restore() {
         done
 
         # convert database dump to plain-text sql (as gitlab restore expects)
-        gitlab-rake -e "exec \"pg_restore --clean \\"$db_pgdump\\" >$tmpd/gitlab_backup/db/database.sql \""
+        gitlab-rake -e "exec \"pg_restore --clean --if-exists -f $tmpd/gitlab_backup/db/database.sql \\"$db_pgdump\\" \""
         rm -rf "$db_pgdump"
 
         # tweak gitlab's backup_information.yml so it says db is included in the backup
