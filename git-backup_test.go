@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2024  Nexedi SA and Contributors.
+// Copyright (C) 2015-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -72,6 +73,15 @@ func xgittype(s string) git.ObjectType {
 // xnoref asserts that git reference ref does not exists.
 func xnoref(ref string) {
 	xgit(context.Background(), "update-ref", "--stdin", RunWith{stdin: fmt.Sprintf("verify refs/%s %s\n", ref, Sha1{})})
+}
+
+// xcopy recursively copies directory src to dst.
+func xcopy(t *testing.T, src, dst string) {
+	cmd := exec.Command("cp", "-a", src, dst)
+	err := cmd.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 
@@ -226,6 +236,61 @@ func TestPullRestore(t *testing.T) {
 		t.Fatalf("pull: second run was not noop: δ:\n%s", δ12)
 	}
 
+	// pull again with modifying one of the repositories simultaneously
+	//
+	// This verifies that pulling results in consistent refs and objects
+	// even if backed'up repo is modified concurrently. Previously in such
+	// case pull used to create backup.refs and repo.git/refs inconsistent
+	// to each other leading to an error on restore.
+	//
+	// We test this case via modifying a ref right after fetch but before
+	// pulling of plain files from inside repo.git . In order to create
+	// consisten backup pull should ignore content of refs in files and
+	// read refs only once - when doing the fetch.
+	mod1 := workdir + "/1mod"
+	xcopy(t, my1, mod1)
+
+	mod1RepoUpdated := false
+	defer func() { tfetchPostHook = nil }()
+	tfetchPostHook = func(repo string) {
+		if repo != mod1 + "/dir/hello.git" {
+			return
+		}
+		if mod1RepoUpdated {
+			t.Fatal("hello.git post fetch called twice")
+		}
+
+		hold := xgitSha1(ctx, "--git-dir="+repo, "rev-parse", "--verify", "refs/test/ref-to-blob")
+		hnew := xgitSha1(ctx, "--git-dir="+repo, "hash-object", "-w", "--stdin", RunWith{stdin: "new blob"})
+		if hnewOk := XSha1("cb8d6bb5e54b1c7159698442057416473a3b5385"); hnew != hnewOk {
+			t.Fatalf("object for new blob did not hash correctly: have: %s  ; want: %s", hnew, hnewOk)
+		}
+		xgit(ctx, "--git-dir="+repo, "update-ref", "refs/test/ref-to-blob", hnew, hold)
+		hnew_ := xgitSha1(ctx, "--git-dir="+repo, "rev-parse", "--verify", "refs/test/ref-to-blob")
+		if hnew_ != hnew {
+			t.Fatalf("ref-to-blob did not update correctly: have %s  ; want %s", hnew_, hnew)
+		}
+
+		mod1RepoUpdated = true
+	}
+
+	cmd_pull(ctx, gb, []string{mod1 + ":b1"})
+	afterPull()
+
+	tfetchPostHook = nil
+	if !mod1RepoUpdated {
+		t.Fatal("mod1/hello.git: hook to update it right after fetch was not ran")
+	}
+
+	h3 := xgitSha1(ctx, "rev-parse", "HEAD")
+	if h3 == h2 {
+		t.Fatal("pull: third run did not adjusted HEAD")
+	}
+	δ23 := xgit(ctx, "diff", h2, h3)
+	if δ23 != "" {
+		t.Fatalf("pull: third run was not noop: δ:\n%s", δ23)
+	}
+
 
 	// restore backup
 	work1 := workdir + "/1"
@@ -237,21 +302,21 @@ func TestPullRestore(t *testing.T) {
 	if gerr != nil && gerr.Sys().(syscall.WaitStatus).ExitStatus() > 1 {
 		t.Fatal(gerr)
 	}
-	gitObjectsRe := regexp.MustCompile(`\.git/objects/`)
+	gitObjectsAndRefsRe := regexp.MustCompile(`\.git/(objects/|refs/|packed-refs|reftable/)`)
 	for _, diffline := range strings.Split(diff, "\n") {
 		// :srcmode dstmode srcsha1 dstsha1 status\tpath
 		_, path, err := xstrings.HeadTail(diffline, "\t")
 		if err != nil {
 			t.Fatalf("restorecheck: cannot parse diff line %q", diffline)
 		}
-		// git objects can be represented differently (we check them later)
-		if gitObjectsRe.FindString(path) != "" {
+		// git objects and refscan be represented differently (we check them later)
+		if gitObjectsAndRefsRe.FindString(path) != "" {
 			continue
 		}
 		t.Fatal("restorecheck: unexpected diff:", diffline)
 	}
 
-	// verify git objects restored to the same as original
+	// verify git objects and refs restored to the same as original
 	err = filepath.Walk(my1, func(path string, info os.FileInfo, err error) error {
 		// any error -> stop
 		if err != nil {

@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2021  Nexedi SA and Contributors.
+// Copyright (C) 2015-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -476,6 +476,12 @@ func cmd_pull_(ctx context.Context, gb *git.Repository, pullspecv []PullSpec) {
 
 			// files -> blobs + queue info for adding blobs to index
 			if !info.IsDir() {
+				// everything related to *.git/refs is ignored
+				// (see below comment about .git/refs for details)
+				if strings.HasSuffix(path, ".git/packed-refs") {
+					return nil
+				}
+
 				infof("# file %s\t<- %s", prefix, path)
 				blob, mode := file_to_blob(gb, path)
 				blobbedv = append(blobbedv,
@@ -487,6 +493,11 @@ func cmd_pull_(ctx context.Context, gb *git.Repository, pullspecv []PullSpec) {
 
 			// do not recurse into *.git/objects/  - we'll save them specially
 			if strings.HasSuffix(path, ".git/objects") {
+				return filepath.SkipDir
+			}
+
+			// neither we do not recurse into *.git/refs & co  - we'll save refs via backup.refs blob
+			if strings.HasSuffix(path, ".git/refs") || strings.HasSuffix(path, ".git/reftable") {
 				return filepath.SkipDir
 			}
 
@@ -692,8 +703,14 @@ func cmd_pull_(ctx context.Context, gb *git.Repository, pullspecv []PullSpec) {
 //
 // Note: fetch does not create any local references - the references returned
 // only describe state of references in fetched source repository.
+var tfetchPostHook func(repo string)
 func fetch(ctx context.Context, repo string, alreadyHave Sha1Set) (refv, fetchedv []Ref, err error) {
 	defer xerr.Contextf(&err, "fetch %s", repo)
+	defer func() {
+		if tfetchPostHook != nil {
+			tfetchPostHook(repo)
+		}
+	}()
 
 	// first check which references are advertised
 	refv, err = lsremote(ctx, repo)
@@ -1008,6 +1025,27 @@ func cmd_restore_(ctx context.Context, gb *git.Repository, HEAD_ string, restore
 
 				exc.Raiseif(ctx.Err())
 
+				// skip *.git/refs/... & co on restore
+				//
+				// pre-2025 git-backup used to save both backup.refs and .git/refs/* as regular files
+				// which was resulting in inconsistent backup in the presence of concurrent
+				// modifications of the saved repository because refs values were read and saved twice -
+				// once at the fetch time, and then also when saving .git/refs/* as just files. Nowadays
+				// pull saves refs observed only at the fetch time and does not pull .git/refs/* as
+				// regular files. However to be able to restore backups made before corresponding pull
+				// fix, restore needs to ignore refs-related files and recreate refs using backup.refs
+				// blob as the only source.
+				dotgit := strings.LastIndex(filename, ".git/")
+				if dotgit != -1 {
+					ingit := filename[dotgit:]
+					if strings.HasPrefix(ingit, ".git/refs/") ||
+					   strings.HasPrefix(ingit, ".git/reftable/") ||
+					   ingit == ".git/packed-refs" {
+						   infof("# file %s\t-> %s\t(skip)", prefix, filename)
+						   continue
+					}
+				}
+
 				filename = reprefix(prefix, dir, filename)
 				infof("# file %s\t-> %s", prefix, filename)
 				blob_to_file(gb, sha1, mode, filename)
@@ -1098,11 +1136,19 @@ func cmd_restore_(ctx context.Context, gb *git.Repository, HEAD_ string, restore
 
 					xgit2(ctx, pack_argv, RunWith{stdin: p.refs.Sha1HeadsStr(), stderr: gitprogress()})
 
+					// extract refs for that repo from backup.refs entries
+					repo_refs := p.refs.Values()
+					sort.Sort(ByRefname(repo_refs))
+					repo_ref_createv := make([]string, 0, len(repo_refs))
+					for _, ref := range repo_refs {
+						repo_ref_createv = append(repo_ref_createv, fmt.Sprintf("create refs/%s\x00%s", ref.name, ref.sha1))
+					}
+					repo_ref_create := strings.Join(repo_ref_createv, "\x00")
+					xgit(ctx, "--git-dir="+p.repopath, "update-ref", "--no-deref", "--stdin", "-z", RunWith{stdin: repo_ref_create})
+
 					// verify that extracted repo refs match backup.refs index after extraction
 					x_ref_list := xgit(ctx, "--git-dir="+p.repopath,
 						"for-each-ref", "--format=%(objectname) %(refname)")
-					repo_refs := p.refs.Values()
-					sort.Sort(ByRefname(repo_refs))
 					repo_ref_listv := make([]string, 0, len(repo_refs))
 					for _, ref := range repo_refs {
 						repo_ref_listv = append(repo_ref_listv, fmt.Sprintf("%s refs/%s", ref.sha1, ref.name))
