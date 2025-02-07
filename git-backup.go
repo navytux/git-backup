@@ -90,7 +90,7 @@ import (
 	"lab.nexedi.com/kirr/go123/xstrings"
 	"lab.nexedi.com/kirr/go123/xsync"
 
-	git "github.com/libgit2/git2go/v31"
+	"lab.nexedi.com/kirr/git-backup/internal/git"
 )
 
 // verbose output

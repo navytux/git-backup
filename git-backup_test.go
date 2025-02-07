@@ -36,7 +36,7 @@ import (
 	"lab.nexedi.com/kirr/go123/xruntime"
 	"lab.nexedi.com/kirr/go123/xstrings"
 
-	git "github.com/libgit2/git2go/v31"
+	"lab.nexedi.com/kirr/git-backup/internal/git"
 )
 
 func xgetcwd(t *testing.T) string {

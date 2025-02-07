@@ -1,4 +1,4 @@
-// Copyright (C) 2015-2021  Nexedi SA and Contributors.
+// Copyright (C) 2015-2025  Nexedi SA and Contributors.
 //                          Kirill Smelkov <kirr@nexedi.com>
 //
 // This program is free software: you can Use, Study, Modify and Redistribute
@@ -27,7 +27,7 @@ import (
 
 	"lab.nexedi.com/kirr/go123/mem"
 
-	git "github.com/libgit2/git2go/v31"
+	"lab.nexedi.com/kirr/git-backup/internal/git"
 )
 
 const SHA1_RAWSIZE = 20
@@ -93,7 +93,7 @@ func (p BySha1) Len() int           { return len(p) }
 func (p BySha1) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 func (p BySha1) Less(i, j int) bool { return bytes.Compare(p[i].sha1[:], p[j].sha1[:]) < 0 }
 
-// interoperability with git2go
+// interoperability with git package
 func (sha1 *Sha1) AsOid() *git.Oid {
 	return (*git.Oid)(&sha1.sha1)
 }
