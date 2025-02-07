@@ -17,13 +17,45 @@
 // See COPYING file for full licensing terms.
 // See https://www.nexedi.com/licensing for rationale and options.
 
-// Package internal/git wraps package git2go.
+// Package internal/git wraps package git2go with providing unconditional safety.
+//
+// For example git2go.Object.Data() returns []byte that aliases unsafe memory
+// that can go away from under []byte if original Object is garbage collected.
+// The following code snippet is thus _not_ correct:
+//
+//	obj = odb.Read(sha1)
+//	data = obj.Data()
+//	... use data
+//
+// because obj can be garbage-collected right after `data = obj.Data()` but
+// before `use data` leading to either crashes or memory corruption. A
+// runtime.KeepAlive(obj) needs to be added to the end of the snippet - after
+// `use data` - to make that code correct.
+//
+// Given that obj.Data() is not "speaking" by itself as unsafe, and that there
+// are many similar methods, it is hard to see which places in the code needs
+// special attention.
+//
+// For this reason git-backup took decision to localize git2go-related code in
+// one small place here, and to expose only safe things to outside. That is we
+// make data copies when reading object data and similar things to provide
+// unconditional safety to the caller via that copy cost.
+//
+// The copy cost is smaller compared to the cost of either spawning e.g. `git
+// cat-file` for every object, or interacting with `git cat-file --batch`
+// server spawned once, but still spending context switches on every request
+// and still making the copy on socket or pipe transfer. But most of all the
+// copy cost is negligible to the cost of catching hard to reproduce crashes or
+// data corruptions in the production environment.
 package git
 
 import (
+	"runtime"
+
 	git2go "github.com/libgit2/git2go/v31"
 )
 
+// constants are safe to propagate as is.
 const (
 	ObjectAny     = git2go.ObjectAny
 	ObjectInvalid = git2go.ObjectInvalid
@@ -34,39 +66,49 @@ const (
 )
 
 
+// types that are safe to propagate as is.
 type (
-	ObjectType = git2go.ObjectType
-	Oid        = git2go.Oid
-	Signature  = git2go.Signature
-	TreeEntry  = git2go.TreeEntry
+	ObjectType = git2go.ObjectType // int
+	Oid        = git2go.Oid        // [20]byte             ; cloned when retrieved
+	Signature  = git2go.Signature  // struct with strings  ; strings are cloned when retrieved
+	TreeEntry  = git2go.TreeEntry  // struct with sting, Oid, ...  ; strings and oids are cloned when retrieved
 )
 
 
+// types that we wrap to provide safety.
+
+// Repository provides safe wrapper over git2go.Repository .
 type Repository struct {
 	repo       *git2go.Repository
 	References *ReferenceCollection
 }
 
+// ReferenceCollection provides safe wrapper over git2go.ReferenceCollection .
 type ReferenceCollection struct {
 	r *Repository
 }
 
+// Reference provides safe wrapper over git2go.Reference .
 type Reference struct {
 	ref *git2go.Reference
 }
 
+// Commit provides safe wrapper over git2go.Commit .
 type Commit struct {
 	commit *git2go.Commit
 }
 
+// Tree provides safe wrapper over git2go.Tree .
 type Tree struct {
 	tree *git2go.Tree
 }
 
+// Odb provides safe wrapper over git2go.Odb .
 type Odb struct {
 	odb *git2go.Odb
 }
 
+// OdbObject provides safe wrapper over git2go.OdbObject .
 type OdbObject struct {
 	obj *git2go.OdbObject
 }
@@ -125,43 +167,89 @@ func (o *Odb) Read(oid *Oid) (*OdbObject, error) {
 }
 
 
-// wrappers over methods
+// wrappers over safe methods
 
 func (c *Commit) ParentCount() uint	{ return c.commit.ParentCount() }
 func (o *OdbObject) Type() ObjectType	{ return o.obj.Type() }
 
 
+// wrappers over unsafe, or potentially unsafe methods
+
 func (r *Repository) Path() string {
-	return r.repo.Path()
+	path := stringsClone( r.repo.Path() )
+	runtime.KeepAlive(r)
+	return path
 }
 
 func (r *Repository) DefaultSignature() (*Signature, error) {
-	return r.repo.DefaultSignature()
+	s, err := r.repo.DefaultSignature()
+	if s != nil {
+		s = &Signature{
+			Name:  stringsClone(s.Name),
+			Email: stringsClone(s.Email),
+			When:  s.When,
+		}
+	}
+	runtime.KeepAlive(r)
+	return s, err
 }
 
 
 func (c *Commit) Message() string {
-	return c.commit.Message()
+	msg := stringsClone( c.commit.Message() )
+	runtime.KeepAlive(c)
+	return msg
 }
 
 func (c *Commit) ParentId(n uint) *Oid {
-	return c.commit.ParentId(n)
+	pid := oidClone( c.commit.ParentId(n) )
+	runtime.KeepAlive(c)
+	return pid
 }
 
 func (t *Tree) EntryByName(filename string) *TreeEntry {
-	return t.tree.EntryByName(filename)
+	e := t.tree.EntryByName(filename)
+	if e != nil {
+		e = &TreeEntry{
+			Name:     stringsClone(e.Name),
+			Id:       oidClone(e.Id),
+			Type:     e.Type,
+			Filemode: e.Filemode,
+		}
+	}
+	runtime.KeepAlive(t)
+	return e
 }
 
 
 func (o *Odb) Write(data []byte, otype ObjectType) (*Oid, error) {
-	return o.odb.Write(data, otype)
+	oid, err := o.odb.Write(data, otype)
+	oid = oidClone(oid)
+	runtime.KeepAlive(o)
+	return oid, err
 }
 
 
 func (o *OdbObject) Id() *Oid {
-	return o.obj.Id()
+	id := oidClone( o.obj.Id() )
+	runtime.KeepAlive(o)
+	return id
 }
 
 func (o *OdbObject) Data() []byte {
-	return o.obj.Data()
+	data := bytesClone( o.obj.Data() )
+	runtime.KeepAlive(o)
+	return data
+}
+
+
+// misc
+
+func oidClone(oid *Oid) *Oid {
+	var oid2 Oid
+	if oid == nil {
+		return nil
+	}
+	copy(oid2[:], oid[:])
+	return &oid2
 }

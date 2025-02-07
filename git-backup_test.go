@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -445,5 +446,13 @@ func TestRepoRefSplit(t *testing.T) {
 		if repo != tt.repo || ref != tt.ref {
 			t.Errorf("reporef_split(%q) -> %q %q  ; want %q %q", tt.reporef, repo, ref, tt.repo, tt.ref)
 		}
+	}
+}
+
+
+// blob_to_file used to corrupt memory if GC triggers inside it
+func init() {
+	tblob_to_file_mid_hook = func() {
+		runtime.GC()
 	}
 }

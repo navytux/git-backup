@@ -156,10 +156,15 @@ func file_to_blob(g *git.Repository, path string) (Sha1, uint32) {
 }
 
 // blob_sha1, mode -> file
+var tblob_to_file_mid_hook func()
 func blob_to_file(g *git.Repository, blob_sha1 Sha1, mode uint32, path string) {
 	blob, err := ReadObject(g, blob_sha1, git.ObjectBlob)
 	exc.Raiseif(err)
 	blob_content := blob.Data()
+
+	if tblob_to_file_mid_hook != nil {
+		tblob_to_file_mid_hook() // we used to corrupt memory if GC is invoked right here
+	}
 
 	err = os.MkdirAll(pathpkg.Dir(path), 0777)
 	exc.Raiseif(err)
