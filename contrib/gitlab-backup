@@ -89,8 +89,8 @@ need_gitlab_config() {
         puts Gitlab::VERSION, c.backup.path, s.repos_path, s.hooks_path
 
         c = Backup::Database.new($stdout, force: true).config
-        puts c["database"]
-        puts c["adapter"], c["username"], c["host"], c["port"], c["password"]
+        puts c[:database]
+        puts c[:adapter], c[:username], c[:host], c[:port], c[:password]
 
         puts "END"
     ')
