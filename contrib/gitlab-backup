@@ -112,7 +112,7 @@ backup_pull() {
     tmpd=$(mktemp -d `pwd`/gitlab-backup.XXXXXX)
     trap 'rm -rf "$tmpd"' EXIT
 
-    gitlab-rake gitlab:backup:create SKIP=repositories,db,pages | tee "$tmpd/gitlab_backup_create.out"
+    gitlab-rake gitlab:backup:create SKIP=repositories,db,pages,terraform_state,packages | tee "$tmpd/gitlab_backup_create.out"
     backup_tar=`grep "^Creating backup archive: .* done" "$tmpd/gitlab_backup_create.out"` || \
         die "E: Cannot detect backup tar"
 
