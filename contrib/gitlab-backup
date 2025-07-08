@@ -161,6 +161,7 @@ backup_pull() {
     # ( and even if there is no id column we can sort - as COPY does not
     #   guarantee ordering, we can change the order of rows in _whatever_ way and
     #   the dump will still be correct )
+    echo "   + sorting tables"
     # we'll need to run pg_restore many times. Run it directly because via-gitlab-rake invocation is slow
     pg_restore=$(gitlab-rake -e "exec \"which pg_restore\"")
     test -n "$pg_restore"   || die "E: cannot find pg_restore"
@@ -235,6 +236,7 @@ backup_pull() {
 
     # ... split each table to parts <= 16M in size
     # so we do not store very large blobs in git (with which it is inefficient)
+    echo "   + splitting tables"
     find "$db_pgdump" -maxdepth 1 -type f -name "*.dat" -a \! -name toc.dat | \
     while read F; do
         mv $F $F.x
