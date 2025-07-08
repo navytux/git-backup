@@ -1,6 +1,6 @@
 #!/bin/bash -e
 # pull/restore gitlab data into/from git-backup
-# Copyright (C) 2015-2020  Nexedi SA and Contributors.
+# Copyright (C) 2015-2025  Nexedi SA and Contributors.
 #                          Kirill Smelkov <kirr@nexedi.com>
 #
 # This program is free software: you can Use, Study, Modify and Redistribute
@@ -161,15 +161,53 @@ backup_pull() {
     # ( and even if there is no id column we can sort - as COPY does not
     #   guarantee ordering, we can change the order of rows in _whatever_ way and
     #   the dump will still be correct )
+    # we'll need to run pg_restore many times. Run it directly because via-gitlab-rake invocation is slow
+    pg_restore=$(gitlab-rake -e "exec \"which pg_restore\"")
+    test -n "$pg_restore"   || die "E: cannot find pg_restore"
+
+    # tab_schema <tabname> returns schema of named table.
+    tab_schema() {
+        "$pg_restore" -Fd --schema-only --table="$1" -f /dev/stdout "$db_pgdump"  | \
+            sed -n '/^CREATE TABLE/,/^)/p'  | \
+            sed '1d;$d'
+    }
+
+    # tab_id_col <tabname> returns in which column `id`-like field is stored.
+    tab_id_col() {
+        local s=$(tab_schema "$1")
+        # id
+        local n=$(echo "$s" | grep -n '^\s*id\>' | head -1 |grep -o '^[0-9]*')
+        if ! test -n "$n"; then
+            # *_id
+            n=$(echo "$s" | grep -n '^\s*[^[:space:]]\+_id\>' | head -1 |grep -o '^[0-9]*')
+        fi
+        if ! test -n "$n"; then
+            echo "W: $1: cannot determine id-like column" 1>&2
+            n=1
+        fi
+        echo $n
+    }
+
+    # dat_tabname <xxx.dat> returns name of corresponding table for which xxx.dat stores data.
+    "$pg_restore" -l "$db_pgdump" > "$db_pgdump/toc.dat.txt"
+    dat_tabname() {
+        local d=`basename $1 .dat`
+        local tabentry=$(grep "^$d;" "$db_pgdump/toc.dat.txt")
+        test `echo "$tabentry" | wc -l` = 1 || die "E: cannot locate table entry corresponding to $1"
+        local tabname=$(echo "$tabentry" | sed -n 's/^.*TABLE DATA //p' | awk '{ print $2 }')
+        test -n "$tabname"  || die "E: cannot locate table corresponding to $1"
+        echo "$tabname"
+    }
+
     find "$db_pgdump" -maxdepth 1 -type f -name "*.dat" -a \! -name toc.dat | \
     while read F; do
-        # split file into data with numeric-start lines and tail with non-numeric lines
+        # split file into data with numeric lines and tail with non-numeric lines
         touch $F.tail
         ntail=1
         while true; do
             tail --lines $ntail $F > $F.tail.x
-            test "$ntail" == "`wc -l <$F.tail.x`"   || break   # no data part at all ?
-            head -1 $F.tail.x | grep -q '^[0-9]\+'  && break   # first data line
+            test "$ntail" == "`wc -l <$F.tail.x`"      || break # no data part at all ?
+            head -1 $F.tail.x | grep -q '\<[0-9]\+\>'  && break # first data line
 
             # this line was non-numeric too - prepare for next iteration
             mv $F.tail.x $F.tail
@@ -179,7 +217,9 @@ backup_pull() {
         head --lines=-$ntail $F >$F.data
 
         # sort data part
-        sort -n $F.data >$F.data.x
+        tabname=$(dat_tabname $F)
+        idcol=$(tab_id_col $tabname)
+        sort -n -t$'\t' --key=$idcol $F.data >$F.data.x
 
         # re-glue data & tail together
         cat $F.data.x $F.tail >$F.x
