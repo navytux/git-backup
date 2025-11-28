@@ -34,6 +34,7 @@ import (
 
 	"lab.nexedi.com/kirr/go123/exc"
 	"lab.nexedi.com/kirr/go123/my"
+	"lab.nexedi.com/kirr/go123/xerr"
 	"lab.nexedi.com/kirr/go123/xruntime"
 	"lab.nexedi.com/kirr/go123/xstrings"
 
@@ -80,6 +81,25 @@ func xnoref(ref string) {
 func xcopy(t *testing.T, src, dst string) {
 	cmd := exec.Command("cp", "-a", src, dst)
 	err := cmd.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// xprepareTestdata ensures that all .git directories in testdata have objects and refs subdirectories created if missing.
+func xprepareTestdata(t *testing.T, testdataDir string) {
+	err := filepath.Walk(testdataDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() && strings.HasSuffix(path, ".git") {
+			// create objects and refs if missing
+			err1 := os.MkdirAll(filepath.Join(path, "objects"), 0777)
+			err2 := os.MkdirAll(filepath.Join(path, "refs"), 0777)
+			err = xerr.Merge(err1, err2)
+		}
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +154,8 @@ func TestPullRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	xprepareTestdata(t, mydir+"/testdata")
 
 	// pull from testdata
 	my0 := mydir + "/testdata/0"
