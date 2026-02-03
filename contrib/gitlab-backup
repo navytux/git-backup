@@ -88,9 +88,13 @@ need_gitlab_config() {
         s = c.gitlab_shell
         puts Gitlab::VERSION, c.backup.path, s.repos_path, s.hooks_path
 
-        c = Backup::Database.new($stdout, force: true).config
-        puts c[:database]
-        puts c[:adapter], c[:username], c[:host], c[:port], c[:password]
+        count = Gitlab::Database.database_base_models_with_gitlab_shared.count
+        raise "Only one database base model is supported for now, #{count} databases found in config." if count > 1
+        Gitlab::Database.database_base_models_with_gitlab_shared.each do |database_name, base_model|
+            c = base_model.connection_db_config.configuration_hash
+            puts c[:database]
+            puts c[:adapter], c[:username], c[:host], c[:port], c[:password]
+        end
 
         puts "END"
     ')
